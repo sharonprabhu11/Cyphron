@@ -1,0 +1,11 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+python-dotenv>=1.0
+google-cloud-pubsub>=2.21
+neo4j>=5.20
+redis>=5.0
+firebase-admin>=6.5
+google-cloud-bigquery>=3.25
+websockets>=12.0
+

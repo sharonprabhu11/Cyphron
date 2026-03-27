@@ -1,0 +1,7 @@
+# Optional / placeholder ML deps for the backend.
+# Install only when you’re ready to integrate ML/scoring libraries.
+
+shap>=0.45
+torch>=2.2
+torch-geometric>=2.5
+

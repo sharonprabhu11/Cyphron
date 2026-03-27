@@ -1,0 +1,5 @@
+# Optional heavy deps. Install only if/when you need GNN training locally.
+
+torch>=2.2
+torch-geometric>=2.5
+

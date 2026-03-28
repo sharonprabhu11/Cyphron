@@ -19,7 +19,17 @@ def _json_safe(value: Any) -> Any:
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
     return value
+
+
+def _get_firestore_client():
+    init_firestore()
+    return firestore.client()
 
 
 def store_decision_result(
@@ -34,8 +44,7 @@ def store_decision_result(
     """
 
     try:
-        init_firestore()
-        db = firestore.client()
+        db = _get_firestore_client()
     except Exception as exc:
         print(f"Firestore unavailable, skipping storage: {exc}", flush=True)
         return None
@@ -94,3 +103,30 @@ def store_decision_result(
     except Exception as exc:
         print(f"Firestore write failed, skipping storage: {exc}", flush=True)
         return None
+
+
+def list_alerts(*, limit: int = 50) -> list[dict[str, Any]]:
+    db = _get_firestore_client()
+    docs = (
+        db.collection("alerts")
+        .order_by("created_at", direction=firestore.Query.DESCENDING)
+        .limit(limit)
+        .stream()
+    )
+    return [{"id": doc.id, **_json_safe(doc.to_dict())} for doc in docs]
+
+
+def get_alert(alert_id: str) -> dict[str, Any] | None:
+    db = _get_firestore_client()
+    doc = db.collection("alerts").document(alert_id).get()
+    if not doc.exists:
+        return None
+    return {"id": doc.id, **_json_safe(doc.to_dict())}
+
+
+def get_transaction(transaction_id: str) -> dict[str, Any] | None:
+    db = _get_firestore_client()
+    doc = db.collection("transactions").document(transaction_id).get()
+    if not doc.exists:
+        return None
+    return {"id": doc.id, **_json_safe(doc.to_dict())}

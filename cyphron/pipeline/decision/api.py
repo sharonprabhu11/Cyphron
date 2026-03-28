@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from pipeline.compliance.pdf_renderer import render_pdf
+from pipeline.compliance.str_generator import generate_str
 from pipeline.ingestion.schema import Transaction
 from pipeline.models import DecisionResponse, HealthResponse
 
@@ -34,4 +36,30 @@ def health(request: Request) -> HealthResponse:
 @router.post("/decision", response_model=DecisionResponse)
 def decide(transaction: Transaction, request: Request) -> DecisionResponse:
     service = _get_decision_service(request)
-    return service.decide(transaction)
+    base_response: DecisionResponse = service.decide(transaction)
+    if base_response.risk_tier != "CRITICAL":
+        return base_response
+
+    reasons = [factor.detail for factor in base_response.top_factors if factor.detail]
+    if not reasons:
+        reasons = ["Composite graph and model signals exceeded the critical risk threshold."]
+
+    str_text = generate_str(
+        entity_id=base_response.source_account_id,
+        risk_score=base_response.composite_score,
+        tier=base_response.risk_tier,
+        reasons=reasons,
+        transaction_summary=transaction.model_dump(),
+    )
+    pdf_path = render_pdf(
+        entity_id=base_response.source_account_id,
+        risk_score=base_response.composite_score,
+        tier=base_response.risk_tier,
+        reasons=reasons,
+        str_text=str_text,
+    )
+
+    return base_response.model_copy(update={
+        "str_report": str_text,
+        "pdf_path": pdf_path,
+    })

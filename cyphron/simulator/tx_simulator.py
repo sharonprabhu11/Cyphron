@@ -20,7 +20,7 @@ def generate_tx_id():
 
 
 def generate_account():
-    return "ACC_" + str(random.randint(100, 999))
+    return "ACC_" + uuid4().hex[:8].upper()
 
 
 def generate_device_fingerprint(seed: str):
@@ -65,6 +65,7 @@ def _base_transaction(
     risk_score: float | None = None,
     rule_flags: list[str] | None = None,
     behavior_signature: str | None = None,
+    scenario_id: str | None = None,
     status: str = "PENDING",
     str_generated: bool = False,
     is_fraud: bool = False,
@@ -91,6 +92,7 @@ def _base_transaction(
         "risk_score": risk_score,
         "rule_flags": rule_flags or [],
         "behavior_signature": behavior_signature,
+        "scenario_id": scenario_id,
         "status": status,
         "str_generated": str_generated,
         "is_fraud": is_fraud,
@@ -114,14 +116,50 @@ def generate_normal_tx():
         entity_id=account_id,
         risk_score=0.05,
         behavior_signature="normal",
+        scenario_id=f"NORMAL-LIVE-{uuid4().hex[:8].upper()}",
     )
 
 
-def generate_fanout_fraud():
+def generate_normal_batch(batch_index: int, *, tx_count: int = 10) -> list[dict[str, object]]:
+    scenario_id = f"NORMAL-BATCH-{batch_index:03d}"
+    accounts = [generate_account() for _ in range(5)]
+    primary_device = generate_device_fingerprint(f"{scenario_id}-device")
+    backup_device = generate_device_fingerprint(f"{scenario_id}-backup")
+    ip_block = random.randint(10, 200)
+
+    txs: list[dict[str, object]] = []
+    for i in range(tx_count):
+        src = random.choice(accounts)
+        dst_choices = [account for account in accounts if account != src]
+        dst = random.choice(dst_choices)
+        txs.append(
+            _base_transaction(
+                transaction_id=generate_tx_id(),
+                account_id=src,
+                recipient_id=dst,
+                amount=random.uniform(500, 18_000),
+                timestamp=generate_timestamp((batch_index * 120) + (i * 15)),
+                channel=random.choice(CHANNELS),
+                device_fingerprint=primary_device if i < (tx_count * 0.7) else backup_device,
+                ip_address=f"10.0.{ip_block}.{random.randint(2, 40)}",
+                phone_number=generate_phone(),
+                session_id=f"SES_{scenario_id}_{i:02d}",
+                geo_hash=random.choice(["dr5ru", "dr5rv", "dr5rw"]),
+                entity_id=src,
+                risk_score=random.choice([0.04, 0.05, 0.06]),
+                behavior_signature=random.choice(["salary_flow", "family_transfer", "merchant_payment"]),
+                scenario_id=scenario_id,
+            )
+        )
+    return txs
+
+
+def generate_fanout_fraud(batch_index: int):
+    scenario_id = f"FRAUD-FANOUT-{batch_index:03d}"
     base_account = generate_account()
-    shared_device = generate_device_fingerprint("fraud_device")
-    shared_session = "SES_FRAUD01"
-    cluster_id = "FRAUD-FANOUT-01"
+    shared_device = generate_device_fingerprint(f"{scenario_id}-device")
+    shared_session = f"SES_{scenario_id}"
+    cluster_id = scenario_id
 
     txs = []
     for i in range(6):
@@ -142,19 +180,21 @@ def generate_fanout_fraud():
                 cluster_id=cluster_id,
                 velocity_score=9.5,
                 hop_count=1,
-                risk_score=0.95,
+                risk_score=random.choice([0.88, 0.91, 0.95]),
                 rule_flags=["fan_out"],
                 behavior_signature="fanout_ring",
+                scenario_id=scenario_id,
                 is_fraud=True,
             )
         )
     return txs
 
 
-def generate_structuring_fraud():
+def generate_structuring_fraud(batch_index: int):
+    scenario_id = f"FRAUD-STRUCT-{batch_index:03d}"
     account = generate_account()
-    device = generate_device_fingerprint("struct_device")
-    cluster_id = "FRAUD-STRUCT-01"
+    device = generate_device_fingerprint(f"{scenario_id}-device")
+    cluster_id = scenario_id
 
     txs = []
     for i in range(5):
@@ -175,18 +215,20 @@ def generate_structuring_fraud():
                 cluster_id=cluster_id,
                 velocity_score=6.0,
                 hop_count=1,
-                risk_score=0.88,
+                risk_score=random.choice([0.82, 0.86, 0.9]),
                 rule_flags=["structuring"],
                 behavior_signature="structuring_pattern",
+                scenario_id=scenario_id,
                 is_fraud=True,
             )
         )
     return txs
 
 
-def generate_layering_fraud():
+def generate_layering_fraud(batch_index: int):
+    scenario_id = f"FRAUD-LAYER-{batch_index:03d}"
     accounts = [generate_account() for _ in range(4)]
-    cluster_id = "FRAUD-LAYER-01"
+    cluster_id = scenario_id
     txs = []
     for index in range(3):
         txs.append(
@@ -206,9 +248,10 @@ def generate_layering_fraud():
                 cluster_id=cluster_id,
                 velocity_score=4.0,
                 hop_count=index + 1,
-                risk_score=0.92,
+                risk_score=random.choice([0.84, 0.89, 0.93]),
                 rule_flags=["layering"],
                 behavior_signature="layering_chain",
+                scenario_id=scenario_id,
                 is_fraud=True,
             )
         )
@@ -222,13 +265,16 @@ def generate_dataset(
     structuring_batches: int = 5,
     layering_batches: int = 5,
 ) -> list[dict[str, object]]:
-    rows = [generate_normal_tx() for _ in range(normal_count)]
-    for _ in range(fanout_batches):
-        rows.extend(generate_fanout_fraud())
-    for _ in range(structuring_batches):
-        rows.extend(generate_structuring_fraud())
-    for _ in range(layering_batches):
-        rows.extend(generate_layering_fraud())
+    normal_batches = max(1, normal_count // 10)
+    rows: list[dict[str, object]] = []
+    for batch_index in range(normal_batches):
+        rows.extend(generate_normal_batch(batch_index, tx_count=10))
+    for batch_index in range(fanout_batches):
+        rows.extend(generate_fanout_fraud(batch_index))
+    for batch_index in range(structuring_batches):
+        rows.extend(generate_structuring_fraud(batch_index))
+    for batch_index in range(layering_batches):
+        rows.extend(generate_layering_fraud(batch_index))
     rows.sort(key=lambda row: str(row["timestamp"]))
     return rows
 

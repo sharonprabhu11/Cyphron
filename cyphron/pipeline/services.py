@@ -67,6 +67,12 @@ class GraphInferenceStore:
             return 0.0, False
         return float(self.node_probabilities[index]), True
 
+    def account_features(self, account_id: str) -> np.ndarray | None:
+        index = self.account_to_index.get(account_id)
+        if index is None:
+            return None
+        return self.x[index]
+
     def subgraph_context(
         self,
         focal_accounts: list[str],
@@ -161,6 +167,11 @@ class DecisionService:
         )
 
         rule_result = score_rules(self.neo4j_client, transaction)
+        focal_account_id = (
+            transaction.account_id
+            if source_probability >= recipient_probability
+            else transaction.recipient_id
+        )
         composite_result = composite_score(
             gnn_probability=gnn_probability,
             rule_flags=rule_result["rule_flags"],
@@ -171,6 +182,8 @@ class DecisionService:
             subgraph_probability=float(subgraph_context["subgraph_probability"]),
             gnn_probability=gnn_probability,
             rule_flags=rule_result["rule_flags"],
+            feature_names=self.inference_store.feature_names,
+            focal_features=self.inference_store.account_features(focal_account_id),
         )
 
         affected_accounts = list(dict.fromkeys([

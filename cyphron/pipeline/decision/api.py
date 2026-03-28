@@ -4,17 +4,32 @@ FastAPI routes for real-time fraud decisioning.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from typing import Any
 
-from pipeline.compliance.str_attach import attach_str_pdf_to_response
-from pipeline.compliance.storage import store_decision_result
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from pipeline.compliance.storage import (
+    get_alert,
+    get_transaction,
+    list_alerts,
+    store_decision_result,
+)
 from pipeline.compliance.pdf_renderer import render_pdf
 from pipeline.compliance.str_generator import generate_str
 from pipeline.ingestion.schema import Transaction
+from pipeline.ml.history import append_training_history
 from pipeline.models import DecisionResponse, HealthResponse
 
 
 router = APIRouter()
+
+
+def _append_history_safely(transaction: Transaction, decision: DecisionResponse) -> None:
+    try:
+        path = append_training_history(transaction, decision)
+        print(f"Training history appended at {path}", flush=True)
+    except Exception as exc:
+        print(f"Training history append failed: {exc}", flush=True)
 
 
 def _get_decision_service(request: Request):
@@ -33,6 +48,36 @@ def health(request: Request) -> HealthResponse:
         neo4j_connected=neo4j_client is not None,
         model_loaded=service is not None,
     )
+
+
+@router.get("/alerts")
+def alerts(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
+    try:
+        return list_alerts(limit=limit)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Unable to fetch alerts: {exc}") from exc
+
+
+@router.get("/alerts/{alert_id}")
+def alert_detail(alert_id: str) -> dict[str, Any]:
+    try:
+        alert = get_alert(alert_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Unable to fetch alert: {exc}") from exc
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+    return alert
+
+
+@router.get("/transactions/{transaction_id}")
+def transaction_detail(transaction_id: str) -> dict[str, Any]:
+    try:
+        transaction = get_transaction(transaction_id)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Unable to fetch transaction: {exc}") from exc
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+    return transaction
 
 
 @router.post("/decision", response_model=DecisionResponse)

@@ -1,10 +1,7 @@
 """
 Cyphron pipeline backend entrypoint (FastAPI).
 
-Minimal working checks:
-- prints "FastAPI server started" on startup
-- GET / returns "Cyphron backend running"
-- calls placeholder initializers (Pub/Sub, Neo4j, Redis) without failing hard
+Database layer: Firestore + BigQuery initialization on startup.
 """
 
 from __future__ import annotations
@@ -13,33 +10,27 @@ import os
 import sys
 from contextlib import asynccontextmanager
 
-# Allow `python pipeline/main.py` from repo root on Windows.
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-try:
-    import uvicorn
-    from fastapi import FastAPI
-except Exception as exc:  # foundation-only: allow running without installed deps
-    print("FastAPI server started", flush=True)
-    print(f"(Install backend deps to run API: pip install -r requirements.txt) {exc}", flush=True)
-    raise SystemExit(0)
+from fastapi import FastAPI
+import uvicorn
 
-from pipeline.entity_resolution.redis_client import initialize_redis
-from pipeline.graph.neo4j_client import initialize_neo4j
-from pipeline.ingestion.pubsub_consumer import start_consumer
+from pipeline.db import create_dummy_collections, init_bigquery, init_firestore
 
-PORT = int(os.getenv("PIPELINE_PORT", os.getenv("PORT", "8001")))
+# Default 8810 avoids common 8000/8001 conflicts; override with PIPELINE_PORT or PORT.
+PORT = int(os.getenv("PIPELINE_PORT", os.getenv("PORT", "8810")))
 HOST = os.getenv("PIPELINE_HOST", "0.0.0.0")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    print("FastAPI server started", flush=True)
-    start_consumer()
-    initialize_neo4j()
-    initialize_redis()
+    print("Initializing DB...", flush=True)
+    init_firestore()
+    create_dummy_collections()
+    init_bigquery()
+    print("DB setup complete", flush=True)
     yield
 
 
@@ -53,5 +44,4 @@ def root():
 
 if __name__ == "__main__":
     print(f"Binding backend on http://{HOST}:{PORT}", flush=True)
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=False)
-
+    uvicorn.run("pipeline.main:app", host=HOST, port=PORT, reload=False)

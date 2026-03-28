@@ -1,6 +1,8 @@
 import type {
   AlertRecord,
+  AlertStrReportPayload,
   AlertTickerItem,
+  DecisionRiskTier,
   FraudSignalSlice,
   RiskVolumePoint,
   SummaryKpi,
@@ -344,6 +346,116 @@ export const mockAlertRecords: AlertRecord[] = [
     updatedAt: "2026-03-25T10:00:00.000Z",
   },
 ];
+
+function reasonsFromRuleFlags(ruleFlags: string): string[] {
+  return ruleFlags
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const lower = s.toLowerCase();
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    });
+}
+
+/** Mirrors pipeline `str_generator._fallback_report` shape (Mock mode). */
+export function buildMockFallbackStrReportText(
+  mode: string,
+  entityId: string,
+  riskScore: number,
+  tier: string,
+  reasons: string[],
+  transactionSummary: Record<string, string>
+): string {
+  const summaryLines = Object.entries(transactionSummary).map(([key, value]) => `- ${key}: ${value}`);
+  const reasonsText =
+    reasons.length > 0 ? reasons.map((r) => `- ${r}`).join("\n") : "- No rule reasons available";
+  const summaryText = summaryLines.length > 0 ? summaryLines.join("\n") : "- Not available";
+  return (
+    `STR Report (${mode})\n\n` +
+    `Entity: ${entityId}\n` +
+    `Risk Score: ${riskScore.toFixed(4)}\n` +
+    `Tier: ${tier}\n\n` +
+    `Reasons:\n${reasonsText}\n\n` +
+    `Transaction Summary:\n${summaryText}\n\n` +
+    "Automated system detected suspicious activity and recommends analyst review."
+  );
+}
+
+export function transactionSummaryFromAlert(a: AlertRecord): Record<string, string> {
+  const ch = a.channel.toUpperCase();
+  const channelNorm = ["UPI", "ATM", "WEB", "MOBILE"].includes(ch) ? ch : "WEB";
+  return {
+    transaction_id: `tx_${a.alertId.replace(/-/g, "_")}`,
+    account_id: a.accountId,
+    recipient_id: a.clusterId,
+    amount: String(a.amount),
+    currency: "INR",
+    timestamp: a.timestamp,
+    channel: channelNorm,
+    tx_type: "TRANSFER",
+    device_fingerprint: a.deviceFingerprint,
+    ip_address: a.ipAddress,
+    session_id: `sess_${a.alertId}`,
+    geo_hash: "",
+    merchant_id: "",
+    entity_id: a.accountId,
+    cluster_id: a.clusterId,
+    behavior_signature: a.behaviorSignature,
+    alert_id: a.alertId,
+    alert_status: a.status,
+  };
+}
+
+function alertToDecisionTier(a: AlertRecord): DecisionRiskTier {
+  if (a.riskLevel === "low") return "LOW";
+  if (a.riskLevel === "medium") return "MEDIUM";
+  return "HIGH";
+}
+
+/** Demo: STR + PDF only for high-severity alerts above this score (pipeline: CRITICAL only). */
+const MOCK_STR_SCORE_THRESHOLD = 0.85;
+
+function isMockStrEligible(a: AlertRecord): boolean {
+  return a.riskLevel === "high" && a.riskScore >= MOCK_STR_SCORE_THRESHOLD;
+}
+
+export function getMockAlertById(alertId: string): AlertRecord | undefined {
+  return mockAlertRecords.find((r) => r.alertId === alertId);
+}
+
+export function getMockStrReportPayloadForAlert(alertId: string): AlertStrReportPayload | null {
+  const alert = getMockAlertById(alertId);
+  if (!alert) return null;
+
+  const reasons = reasonsFromRuleFlags(alert.ruleFlags);
+  const transactionSummary = transactionSummaryFromAlert(alert);
+  const critical = isMockStrEligible(alert);
+  const riskTier: DecisionRiskTier = critical ? "CRITICAL" : alertToDecisionTier(alert);
+  const strReport = critical
+    ? buildMockFallbackStrReportText(
+        "Mock",
+        alert.accountId,
+        alert.riskScore,
+        riskTier,
+        reasons,
+        transactionSummary
+      )
+    : null;
+  const generatedAt = critical ? alert.updatedAt : null;
+
+  return {
+    alertId: alert.alertId,
+    entityId: alert.accountId,
+    riskScore: alert.riskScore,
+    riskTier,
+    reasons,
+    transactionSummary,
+    strReport,
+    generatedAt,
+    pdfDownloadPath: critical ? `/api/alerts/${encodeURIComponent(alertId)}/report/pdf` : null,
+  };
+}
 
 export const mockRiskVolume: RiskVolumePoint[] = [
   { label: "Mon", volume: 4200, riskPct: 8.2 },

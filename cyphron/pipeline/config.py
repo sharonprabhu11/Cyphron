@@ -49,3 +49,11 @@ PROCESSED_GRAPH_PATH = env(
     str(_CYPHRON_ROOT / "ml_training" / "data" / "processed_graph.npz"),
 )
 ENABLE_GCP_STARTUP = env_bool("ENABLE_GCP_STARTUP", True)
+
+# When true, ingestion also writes `alerts` for MEDIUM tier (noisier; useful for local demos).
+INGESTION_ALERT_INCLUDE_MEDIUM = env_bool("INGESTION_ALERT_INCLUDE_MEDIUM", False)
+
+
+def cors_origins() -> list[str]:
+    raw = env("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000") or ""
+    return [part.strip() for part in raw.split(",") if part.strip()]

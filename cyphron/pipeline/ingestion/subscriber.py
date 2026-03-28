@@ -6,8 +6,10 @@ import os
 from google.cloud import pubsub_v1
 
 from pipeline import config
+from pipeline.db.ingestion_store import persist_ingestion_outcome
 from pipeline.graph.neo4j_client import initialize_neo4j
 from pipeline.graph.upsert import upsert_transaction_graph
+from pipeline.ingestion.decision_holder import get_ingestion_decision_service
 from pipeline.ingestion.schema import Transaction
 
 if config.GOOGLE_APPLICATION_CREDENTIALS:
@@ -29,6 +31,16 @@ def process_transaction(tx: Transaction) -> None:
     client = initialize_neo4j()
     if client is not None:
         upsert_transaction_graph(client, tx.model_dump())
+
+    decision = None
+    svc = get_ingestion_decision_service()
+    if svc is not None:
+        try:
+            decision = svc.decide(tx)
+        except Exception as exc:
+            print(f"Scoring failed (ingestion): {exc}", flush=True)
+
+    persist_ingestion_outcome(tx, decision)
 
 
 def callback(message: pubsub_v1.subscriber.message.Message) -> None:

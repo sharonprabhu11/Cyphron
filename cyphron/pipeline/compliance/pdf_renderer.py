@@ -8,6 +8,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def _draw_header_footer(canvas, doc, pagesize: tuple[float, float]) -> None:
+    """Cyphron header rule + page number (aligned with dashboard STR section order)."""
+    width, height = pagesize
+    canvas.saveState()
+    canvas.setStrokeColorRGB(0.88, 0.88, 0.88)
+    canvas.setLineWidth(0.75)
+    canvas.line(40, height - 48, width - 40, height - 48)
+    canvas.setFont("Helvetica-Bold", 10)
+    canvas.setFillColorRGB(0.15, 0.15, 0.15)
+    canvas.drawString(40, height - 42, "Cyphron")
+    canvas.setFont("Helvetica", 9)
+    canvas.setFillColorRGB(0.35, 0.35, 0.35)
+    canvas.drawString(100, height - 41, "Suspicious Transaction Report")
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColorRGB(0.45, 0.45, 0.45)
+    page_num = canvas.getPageNumber()
+    canvas.drawRightString(width - 40, 36, f"Page {page_num}")
+    canvas.restoreState()
+
+
 def render_pdf(
     entity_id: str,
     risk_score: float,
@@ -35,11 +55,21 @@ def render_pdf(
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = output_dir / f"STR_{entity_id}_{int(datetime.now(timezone.utc).timestamp())}.pdf"
 
-    doc = SimpleDocTemplate(str(filename), pagesize=letter)
+    def on_page(canvas, doc) -> None:
+        _draw_header_footer(canvas, doc, letter)
+
+    doc = SimpleDocTemplate(
+        str(filename),
+        pagesize=letter,
+        onFirstPage=on_page,
+        onLaterPages=on_page,
+        topMargin=56,
+    )
     styles = getSampleStyleSheet()
     elements = [
+        Spacer(1, 8),
         Paragraph("<b>Suspicious Transaction Report (STR)</b>", styles["Title"]),
-        Spacer(1, 20),
+        Spacer(1, 16),
         Paragraph(f"<b>Entity ID:</b> {entity_id}", styles["Normal"]),
         Paragraph(f"<b>Risk Score:</b> {risk_score:.4f}", styles["Normal"]),
         Paragraph(f"<b>Risk Tier:</b> {tier}", styles["Normal"]),
@@ -47,7 +77,7 @@ def render_pdf(
             f"<b>Generated At:</b> {datetime.now(timezone.utc).isoformat()}",
             styles["Normal"],
         ),
-        Spacer(1, 20),
+        Spacer(1, 16),
         Paragraph("<b>Key Risk Factors:</b>", styles["Heading2"]),
     ]
 
@@ -55,9 +85,9 @@ def render_pdf(
         elements.append(Paragraph(f"- {reason}", styles["Normal"]))
 
     elements.extend([
-        Spacer(1, 20),
+        Spacer(1, 16),
         Paragraph("<b>Investigation Summary:</b>", styles["Heading2"]),
-        Spacer(1, 10),
+        Spacer(1, 8),
     ])
 
     for line in str_text.splitlines() or [str_text]:

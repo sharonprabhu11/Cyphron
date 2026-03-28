@@ -20,9 +20,11 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from pipeline.config import ENABLE_GCP_STARTUP
+from pipeline.config import ENABLE_GCP_STARTUP, cors_origins
+from pipeline.dashboard_api import router as dashboard_v1_router
 from pipeline.db import create_dummy_collections, init_bigquery, init_firestore
 from pipeline.decision.api import router as decision_router
 from pipeline.graph.neo4j_client import get_neo4j_client, initialize_neo4j
@@ -34,14 +36,6 @@ HOST = os.getenv("PIPELINE_HOST", "0.0.0.0")
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    from pipeline.db import create_dummy_collections, init_bigquery, init_firestore
-
-    print("Initializing DB...", flush=True)
-    init_firestore()
-    create_dummy_collections()
-    init_bigquery()
-    print("DB setup complete", flush=True)
 async def lifespan(app: FastAPI):
     print("Initializing pipeline services...", flush=True)
 
@@ -71,7 +65,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Cyphron Pipeline Backend", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(decision_router)
+app.include_router(dashboard_v1_router, prefix="/api/v1")
 
 
 @app.get("/")

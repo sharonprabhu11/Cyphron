@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
+import useSWR from "swr";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -13,6 +14,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  FileText,
   Flag,
   Search,
   ThumbsUp,
@@ -44,7 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { mockAlertRecords } from "@/lib/dashboard/mockData";
+import { fetchAlerts, getBackendBaseUrl, patchAlertStatus } from "@/lib/api";
 import type { AlertRecord, AlertRiskLevel, AlertStatus } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 
@@ -286,6 +288,14 @@ function queueTabFilter(tab: QueueTab, a: AlertRecord): boolean {
 }
 
 export function AlertsPageClient() {
+  const backendOk = Boolean(getBackendBaseUrl());
+  const {
+    data: records = [],
+    error: loadError,
+    isLoading,
+    mutate,
+  } = useSWR(backendOk ? "alerts-page" : null, () => fetchAlerts({ limit: 200 }), { refreshInterval: 8000 });
+
   const [search, setSearch] = useState("");
   const [queueTab, setQueueTab] = useState<QueueTab>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
@@ -293,20 +303,20 @@ export function AlertsPageClient() {
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<string | null>(mockAlertRecords[0]?.alertId ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const channels = useMemo(() => {
-    const s = new Set(mockAlertRecords.map((a) => a.channel));
+    const s = new Set(records.map((a) => a.channel));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
-  }, []);
+  }, [records]);
 
-  const headerStats = useMemo(() => computeHeaderStats(mockAlertRecords), []);
+  const headerStats = useMemo(() => computeHeaderStats(records), [records]);
 
   const filterBadgeCount = (riskFilter !== "all" ? 1 : 0) + (channelFilter !== "all" ? 1 : 0);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return mockAlertRecords.filter((a) => {
+    return records.filter((a) => {
       if (!queueTabFilter(queueTab, a)) return false;
       if (riskFilter !== "all" && a.riskLevel !== riskFilter) return false;
       if (channelFilter !== "all" && a.channel !== channelFilter) return false;
@@ -323,7 +333,7 @@ export function AlertsPageClient() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [search, queueTab, riskFilter, channelFilter]);
+  }, [search, queueTab, riskFilter, channelFilter, records]);
 
   const sorted = useMemo(() => {
     const arr = [...filtered];
@@ -386,6 +396,20 @@ export function AlertsPageClient() {
 
   return (
     <div className="space-y-5">
+      {!backendOk ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-100">
+          Set <code className="rounded bg-white/70 px-1 dark:bg-black/30">NEXT_PUBLIC_BACKEND_URL</code> (e.g.{" "}
+          <code className="rounded bg-white/70 px-1 dark:bg-black/30">http://localhost:8810</code>) to load alerts.
+        </div>
+      ) : null}
+      {loadError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-100">
+          Failed to load alerts: {loadError.message}
+        </div>
+      ) : null}
+      {isLoading && !records.length ? (
+        <p className="text-sm text-stone-500 dark:text-zinc-400">Loading alerts…</p>
+      ) : null}
       {/* Breadcrumb */}
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <Button variant="ghost" size="sm" className="-ml-2 h-8 gap-1 px-2 text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-zinc-100" asChild>
@@ -672,6 +696,27 @@ export function AlertsPageClient() {
                     ({criticalityLabel(selected.riskLevel)} · {(selected.riskScore * 100).toFixed(0)}% model score)
                   </span>
                   {statusBadge(selected.status)}
+                  <Select
+                    value={selected.status}
+                    onValueChange={async (v) => {
+                      try {
+                        await patchAlertStatus(selected.alertId, v as AlertStatus);
+                        await mutate();
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="h-8 w-[168px] rounded-lg border-stone-200 bg-white text-xs dark:border-white/10 dark:bg-zinc-950">
+                      <SelectValue placeholder="Set status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="open">open</SelectItem>
+                      <SelectItem value="acknowledged">acknowledged</SelectItem>
+                      <SelectItem value="investigating">investigating</SelectItem>
+                      <SelectItem value="closed">closed</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <ScrollArea className="min-h-0 flex-1 pr-3">
                   <div className="grid gap-4 pb-2">
@@ -689,10 +734,16 @@ export function AlertsPageClient() {
                     <DetailField label="Updated" value={formatWhenDetail(selected.updatedAt)} />
                   </div>
                 </ScrollArea>
-                <div className="flex shrink-0 flex-col gap-2 border-t border-stone-100 pt-4 dark:border-white/10 sm:flex-row">
+                <div className="flex shrink-0 flex-col gap-2 border-t border-stone-100 pt-4 dark:border-white/10 sm:flex-row sm:flex-wrap">
                   <Button asChild className="rounded-xl bg-orange-500 hover:bg-orange-600 dark:bg-orange-600 dark:hover:bg-orange-500">
+                    <Link href={`/dashboard/alerts/${encodeURIComponent(selected.alertId)}/report`}>
+                      View STR report
+                      <FileText className="h-4 w-4 opacity-90" />
+                    </Link>
+                  </Button>
+                  <Button variant="outline" asChild className="rounded-xl border-stone-200 dark:border-white/10">
                     <Link href="/dashboard/review-queue">
-                      Open review queue
+                      Review queue
                       <ExternalLink className="h-4 w-4 opacity-90" />
                     </Link>
                   </Button>

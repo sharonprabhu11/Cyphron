@@ -1,5 +1,6 @@
 "use client";
 
+import useSWR from "swr";
 import { memo, useEffect, useState } from "react";
 import {
   CartesianGrid,
@@ -13,8 +14,8 @@ import {
 } from "recharts";
 
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
+import { fetchTransactionsTimeseries, getBackendBaseUrl } from "@/lib/api";
 import type { TimeSeriesPoint } from "@/lib/dashboard/types";
-import { initialTimeSeries, shiftTimeSeries } from "@/lib/dashboard/mockData";
 
 const ChartInner = memo(function ChartInner({ data }: { data: TimeSeriesPoint[] }) {
   return (
@@ -60,23 +61,29 @@ const ChartInner = memo(function ChartInner({ data }: { data: TimeSeriesPoint[] 
 
 export function LiveTransactionsChart() {
   const [mounted, setMounted] = useState(false);
-  const [data, setData] = useState<TimeSeriesPoint[]>(initialTimeSeries);
+  const backendOk = Boolean(getBackendBaseUrl());
+  const { data = [] } = useSWR(
+    backendOk && mounted ? "tx-timeseries" : null,
+    fetchTransactionsTimeseries,
+    { refreshInterval: 8000 }
+  );
+  const chartData: TimeSeriesPoint[] =
+    data.length > 0
+      ? data
+      : Array.from({ length: 24 }, (_, i) => ({
+          t: `${String(i).padStart(2, "0")}:00`,
+          total: 0,
+          highRisk: 0,
+          cleared: 0,
+        }));
 
   useEffect(() => setMounted(true), []);
-
-  useEffect(() => {
-    if (!mounted) return;
-    const id = window.setInterval(() => {
-      setData((prev) => shiftTimeSeries(prev));
-    }, 2000);
-    return () => window.clearInterval(id);
-  }, [mounted]);
 
   return (
     <DashboardCard className="w-full flex-1" title="Transaction throughput (live)">
       <div className="h-full min-h-[280px] w-full flex-1">
         {mounted ? (
-          <ChartInner data={data} />
+          <ChartInner data={chartData} />
         ) : (
           <div className="h-full rounded-xl bg-surface-muted/40 dark:bg-zinc-800/50" aria-hidden />
         )}

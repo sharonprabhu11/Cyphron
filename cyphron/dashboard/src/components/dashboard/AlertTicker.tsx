@@ -1,17 +1,33 @@
 "use client";
 
+import useSWR from "swr";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { alertRecordToTickerItem, fetchAlerts, getBackendBaseUrl } from "@/lib/api";
 import type { AlertTickerItem } from "@/lib/dashboard/types";
-import { createTickerAlert, seedTickerItems } from "@/lib/dashboard/mockData";
 import { cn } from "@/lib/utils";
 
-const INITIAL = 8;
-const INTERVAL_MS = 3500;
-
 export function AlertTicker() {
-  const [items, setItems] = useState<AlertTickerItem[]>(() => seedTickerItems(INITIAL));
+  const backendOk = Boolean(getBackendBaseUrl());
+  const { data: alerts = [] } = useSWR(backendOk ? "ticker-alerts" : null, () => fetchAlerts({ limit: 30 }), {
+    refreshInterval: 5000,
+  });
+  const items: AlertTickerItem[] = alerts.length
+    ? alerts.map(alertRecordToTickerItem)
+    : backendOk
+      ? []
+      : [
+          {
+            id: "cfg",
+            title: "Configure backend",
+            meta: "Set NEXT_PUBLIC_BACKEND_URL to the FastAPI base URL",
+            value: "—",
+            badge: "API",
+            badgeUp: false,
+            inverted: false,
+          },
+        ];
   const [reduceMotion, setReduceMotion] = useState(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
@@ -30,17 +46,6 @@ export function AlertTicker() {
   }, [reduceMotion]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setItems((prev) => {
-        const next = [...prev, createTickerAlert()];
-        if (next.length > 40) next.splice(0, next.length - 40);
-        return next;
-      });
-    }, INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, []);
-
-  useEffect(() => {
     scrollToEnd();
   }, [items, scrollToEnd]);
 
@@ -54,6 +59,9 @@ export function AlertTicker() {
         ref={scrollerRef}
         className="flex gap-4 overflow-x-auto pb-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
+        {items.length === 0 && backendOk ? (
+          <p className="px-2 text-sm text-ink-muted">No alerts yet — run ingestion or the simulator.</p>
+        ) : null}
         {items.map((item) => (
           <article
             key={item.id}

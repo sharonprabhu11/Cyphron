@@ -96,3 +96,11 @@ html.dark body {
     border-color: hsl(var(--border) / 1);
   }
 }
+
+/* STR report: cleaner print (toolbar hidden via Tailwind print:hidden on controls). */
+@media print {
+  .str-report-print-root pre {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}

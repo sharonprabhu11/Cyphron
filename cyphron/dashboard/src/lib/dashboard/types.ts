@@ -69,3 +69,23 @@ export type AlertRecord = {
   createdAt: string;
   updatedAt: string;
 };
+
+/** Pipeline `DecisionResponse.risk_tier` — STR is generated only for CRITICAL. */
+export type DecisionRiskTier = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+/**
+ * Payload for the per-alert STR report UI (mirrors `str_report` + generator inputs).
+ * When `strReport` is null, the alert exists but no STR was produced (non-CRITICAL).
+ */
+export type AlertStrReportPayload = {
+  alertId: string;
+  entityId: string;
+  riskScore: number;
+  riskTier: DecisionRiskTier;
+  reasons: string[];
+  transactionSummary: Record<string, string>;
+  strReport: string | null;
+  generatedAt: string | null;
+  /** Relative URL for dashboard PDF download (Next.js route). */
+  pdfDownloadPath: string | null;
+};

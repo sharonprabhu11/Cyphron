@@ -47,6 +47,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { fetchAlerts, getBackendBaseUrl, patchAlertStatus } from "@/lib/api";
+import { useDashboardRealtime } from "@/lib/dashboardRealtimeContext";
 import type { AlertRecord, AlertRiskLevel, AlertStatus } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 
@@ -289,12 +290,15 @@ function queueTabFilter(tab: QueueTab, a: AlertRecord): boolean {
 
 export function AlertsPageClient() {
   const backendOk = Boolean(getBackendBaseUrl());
+  const { reducePolling } = useDashboardRealtime();
   const {
     data: records = [],
     error: loadError,
     isLoading,
     mutate,
-  } = useSWR(backendOk ? "alerts-page" : null, () => fetchAlerts({ limit: 200 }), { refreshInterval: 8000 });
+  } = useSWR(backendOk ? "alerts-page" : null, () => fetchAlerts({ limit: 200 }), {
+    refreshInterval: reducePolling ? 90_000 : 8000,
+  });
 
   const [search, setSearch] = useState("");
   const [queueTab, setQueueTab] = useState<QueueTab>("all");

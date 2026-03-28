@@ -5,12 +5,15 @@ REST API for the Next.js dashboard: alerts, analytics, graph reads, simulator.
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from google.api_core import exceptions as gcp_exceptions
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -26,6 +29,39 @@ from pipeline.scoring.composite import ACTION_BY_TIER
 router = APIRouter(tags=["dashboard-v1"])
 
 _SEED_DOC_ID = "cyphron_db_seed"
+
+_DASHBOARD_CACHE: dict[str, tuple[float, Any]] = {}
+_T = TypeVar("_T")
+
+
+def invalidate_dashboard_firestore_cache() -> None:
+    """Call after mutating Firestore dashboard data (e.g. PATCH alert)."""
+    _DASHBOARD_CACHE.clear()
+
+
+def _dashboard_cached(cache_key: str, compute: Callable[[], _T]) -> _T:
+    ttl = config.dashboard_firestore_cache_seconds()
+    now = time.monotonic()
+    if ttl > 0 and cache_key in _DASHBOARD_CACHE:
+        ts, val = _DASHBOARD_CACHE[cache_key]
+        if now - ts < ttl:
+            return val  # type: ignore[return-value]
+    try:
+        val = compute()
+        if ttl > 0:
+            _DASHBOARD_CACHE[cache_key] = (now, val)
+        return val
+    except gcp_exceptions.ResourceExhausted:
+        if cache_key in _DASHBOARD_CACHE:
+            return _DASHBOARD_CACHE[cache_key][1]  # type: ignore[return-value]
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore quota exceeded. Try again later or raise FIRESTORE_ANALYTICS_DOC_CAP / billing limits.",
+        ) from None
+
+
+def _analytics_cap() -> int:
+    return config.firestore_analytics_doc_cap()
 
 
 def _firestore_db():
@@ -120,45 +156,53 @@ def list_alerts(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=10_000),
 ) -> list[dict[str, Any]]:
-    db = _firestore_db()
-    snaps = list(db.collection("alerts").limit(500).stream())
-    rows: list[tuple[float, dict[str, Any]]] = []
-    since_dt: datetime | None = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        except Exception:
-            since_dt = None
-    for snap in snaps:
-        if snap.id == _SEED_DOC_ID:
-            continue
-        data = snap.to_dict() or {}
-        if status and str(data.get("status") or "") != status:
-            continue
-        if risk_level and str(data.get("risk_level") or "") != risk_level:
-            continue
-        ts_raw = data.get("timestamp") or data.get("updated_at") or data.get("created_at")
-        if since_dt and ts_raw:
+    cache_key = f"alerts:{status}:{risk_level}:{since}:{limit}:{offset}"
+
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        fetch_n = min(
+            config.firestore_list_alerts_fetch_cap(),
+            max(offset + limit + 80, 120),
+        )
+        snaps = list(db.collection("alerts").limit(fetch_n).stream())
+        rows: list[tuple[float, dict[str, Any]]] = []
+        since_dt: datetime | None = None
+        if since:
             try:
-                if hasattr(ts_raw, "timestamp"):
-                    if ts_raw.tzinfo is None:
-                        ts_raw = ts_raw.replace(tzinfo=timezone.utc)
-                    if ts_raw < since_dt.astimezone(timezone.utc):
-                        continue
-                elif isinstance(ts_raw, str):
-                    tsd = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-                    if tsd < since_dt:
-                        continue
+                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
             except Exception:
-                pass
-        sort_key = 0.0
-        u = data.get("updated_at") or data.get("created_at")
-        if hasattr(u, "timestamp"):
-            sort_key = float(u.timestamp())
-        rows.append((sort_key, _alert_doc_to_record(snap.id, data)))
-    rows.sort(key=lambda x: x[0], reverse=True)
-    sliced = [r[1] for r in rows[offset : offset + limit]]
-    return sliced
+                since_dt = None
+        for snap in snaps:
+            if snap.id == _SEED_DOC_ID:
+                continue
+            data = snap.to_dict() or {}
+            if status and str(data.get("status") or "") != status:
+                continue
+            if risk_level and str(data.get("risk_level") or "") != risk_level:
+                continue
+            ts_raw = data.get("timestamp") or data.get("updated_at") or data.get("created_at")
+            if since_dt and ts_raw:
+                try:
+                    if hasattr(ts_raw, "timestamp"):
+                        if ts_raw.tzinfo is None:
+                            ts_raw = ts_raw.replace(tzinfo=timezone.utc)
+                        if ts_raw < since_dt.astimezone(timezone.utc):
+                            continue
+                    elif isinstance(ts_raw, str):
+                        tsd = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                        if tsd < since_dt:
+                            continue
+                except Exception:
+                    pass
+            sort_key = 0.0
+            u = data.get("updated_at") or data.get("created_at")
+            if hasattr(u, "timestamp"):
+                sort_key = float(u.timestamp())
+            rows.append((sort_key, _alert_doc_to_record(snap.id, data)))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        return [r[1] for r in rows[offset : offset + limit]]
+
+    return _dashboard_cached(cache_key, compute)
 
 
 @router.get("/alerts/{alert_id}")
@@ -184,6 +228,7 @@ def patch_alert(alert_id: str, body: AlertPatchBody) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Alert not found")
     ref.set({"status": body.status, "updated_at": SERVER_TIMESTAMP}, merge=True)
     snap = ref.get()
+    invalidate_dashboard_firestore_cache()
     return _alert_doc_to_record(ref.id, snap.to_dict() or {})
 
 
@@ -254,6 +299,7 @@ def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
                 },
                 merge=True,
             )
+            invalidate_dashboard_firestore_cache()
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"STR generation failed: {exc}") from exc
 
@@ -333,223 +379,252 @@ def _bucket_rule_flag(flag_blob: str) -> str:
 
 @router.get("/analytics/summary")
 def analytics_summary() -> list[dict[str, Any]]:
-    db = _firestore_db()
-    now = datetime.now(timezone.utc)
-    day_ago = now - timedelta(hours=24)
-    alerts = [s for s in db.collection("alerts").stream() if s.id != _SEED_DOC_ID]
-    txs = [s for s in db.collection("transactions").stream() if s.id != _SEED_DOC_ID]
+    cap = _analytics_cap()
 
-    def in_window(ts: Any) -> bool:
-        dt = _parse_ts(ts)
-        return dt is not None and dt >= day_ago
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        now = datetime.now(timezone.utc)
+        day_ago = now - timedelta(hours=24)
+        alerts = [
+            s for s in db.collection("alerts").limit(cap).stream() if s.id != _SEED_DOC_ID
+        ]
+        txs = [
+            s for s in db.collection("transactions").limit(cap).stream() if s.id != _SEED_DOC_ID
+        ]
 
-    alerts_24 = 0
-    high_risk = 0
-    for s in alerts:
-        d = s.to_dict() or {}
-        if in_window(d.get("timestamp") or d.get("created_at")):
-            alerts_24 += 1
-        if str(d.get("risk_level") or "") == "high":
-            high_risk += 1
+        def in_window(ts: Any) -> bool:
+            dt = _parse_ts(ts)
+            return dt is not None and dt >= day_ago
 
-    tx_24 = sum(
-        1
-        for s in txs
-        if in_window((s.to_dict() or {}).get("timestamp") or (s.to_dict() or {}).get("ingested_at"))
-    )
-    open_cases = sum(1 for s in alerts if str((s.to_dict() or {}).get("status") or "") == "open")
+        alerts_24 = 0
+        high_risk = 0
+        for s in alerts:
+            d = s.to_dict() or {}
+            if in_window(d.get("timestamp") or d.get("created_at")):
+                alerts_24 += 1
+            if str(d.get("risk_level") or "") == "high":
+                high_risk += 1
 
-    def fmt_num(n: int) -> str:
-        if n >= 1000:
-            return f"{n / 1000:.1f}k".replace(".0k", "k")
-        return str(n)
+        tx_24 = sum(
+            1
+            for s in txs
+            if in_window((s.to_dict() or {}).get("timestamp") or (s.to_dict() or {}).get("ingested_at"))
+        )
+        open_cases = sum(1 for s in alerts if str((s.to_dict() or {}).get("status") or "") == "open")
 
-    return [
-        {
-            "id": "alerts",
-            "label": "Alerts (24h)",
-            "value": str(alerts_24),
-            "deltaLabel": "live",
-            "deltaPositive": True,
-            "tint": "blueMuted",
-        },
-        {
-            "id": "tx-in",
-            "label": "Transactions in",
-            "value": fmt_num(max(tx_24, len(txs))),
-            "deltaLabel": "24h",
-            "deltaPositive": True,
-            "tint": "greenMuted",
-        },
-        {
-            "id": "high-risk",
-            "label": "High risk",
-            "value": str(high_risk),
-            "deltaLabel": "all alerts",
-            "deltaPositive": False,
-            "tint": "blueMuted",
-        },
-        {
-            "id": "cases",
-            "label": "Open cases",
-            "value": str(open_cases),
-            "deltaLabel": "queue",
-            "deltaPositive": open_cases < 50,
-            "tint": "greenMuted",
-        },
-    ]
+        def fmt_num(n: int) -> str:
+            if n >= 1000:
+                return f"{n / 1000:.1f}k".replace(".0k", "k")
+            return str(n)
+
+        return [
+            {
+                "id": "alerts",
+                "label": "Alerts (24h)",
+                "value": str(alerts_24),
+                "deltaLabel": "live",
+                "deltaPositive": True,
+                "tint": "blueMuted",
+            },
+            {
+                "id": "tx-in",
+                "label": "Transactions in",
+                "value": fmt_num(max(tx_24, len(txs))),
+                "deltaLabel": "24h",
+                "deltaPositive": True,
+                "tint": "greenMuted",
+            },
+            {
+                "id": "high-risk",
+                "label": "High risk",
+                "value": str(high_risk),
+                "deltaLabel": "all alerts",
+                "deltaPositive": False,
+                "tint": "blueMuted",
+            },
+            {
+                "id": "cases",
+                "label": "Open cases",
+                "value": str(open_cases),
+                "deltaLabel": "queue",
+                "deltaPositive": open_cases < 50,
+                "tint": "greenMuted",
+            },
+        ]
+
+    return _dashboard_cached("analytics:summary", compute)
 
 
 @router.get("/analytics/fraud-signals")
 def analytics_fraud_signals() -> list[dict[str, Any]]:
-    db = _firestore_db()
-    counts: dict[str, int] = {}
-    colors = {
-        "Structuring": "#2563eb",
-        "Fan-out / velocity": "#16a34a",
-        "Geo / channel": "#38bdf8",
-        "Mule / identity": "#22c55e",
-        "Other": "#94a3b8",
-    }
-    for s in db.collection("alerts").stream():
-        if s.id == _SEED_DOC_ID:
-            continue
-        flags = str((s.to_dict() or {}).get("rule_flags") or "")
-        if not flags:
-            b = "Other"
-        else:
-            b = _bucket_rule_flag(flags)
-        counts[b] = counts.get(b, 0) + 1
-    if not counts:
-        counts = {"Other": 1}
-    return [{"name": k, "value": v, "color": colors.get(k, "#94a3b8")} for k, v in counts.items()]
+    cap = _analytics_cap()
+
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        counts: dict[str, int] = {}
+        colors = {
+            "Structuring": "#2563eb",
+            "Fan-out / velocity": "#16a34a",
+            "Geo / channel": "#38bdf8",
+            "Mule / identity": "#22c55e",
+            "Other": "#94a3b8",
+        }
+        for s in db.collection("alerts").limit(cap).stream():
+            if s.id == _SEED_DOC_ID:
+                continue
+            flags = str((s.to_dict() or {}).get("rule_flags") or "")
+            if not flags:
+                b = "Other"
+            else:
+                b = _bucket_rule_flag(flags)
+            counts[b] = counts.get(b, 0) + 1
+        if not counts:
+            counts = {"Other": 1}
+        return [{"name": k, "value": v, "color": colors.get(k, "#94a3b8")} for k, v in counts.items()]
+
+    return _dashboard_cached("analytics:fraud-signals", compute)
 
 
 @router.get("/analytics/channel-exposure")
 def analytics_channel_exposure() -> list[dict[str, Any]]:
-    db = _firestore_db()
-    by_ch: dict[str, dict[str, float | int]] = {}
-    for s in db.collection("transactions").stream():
-        if s.id == _SEED_DOC_ID:
-            continue
-        d = s.to_dict() or {}
-        ch = str(d.get("channel") or "UNKNOWN").upper()
-        amt = float(d.get("amount") or 0)
-        entry = by_ch.setdefault(ch, {"volume": 0.0, "flagged": 0})
-        entry["volume"] = float(entry["volume"]) + amt
-        if d.get("is_fraud") or d.get("risk_score"):
-            rs = d.get("risk_score")
-            if rs is not None and float(rs) > 0.5:
-                entry["flagged"] = int(entry["flagged"]) + 1
+    cap = _analytics_cap()
 
-    total_vol = sum(float(v["volume"]) for v in by_ch.values()) or 1.0
-    rows: list[dict[str, Any]] = []
-    for ch, agg in sorted(by_ch.items(), key=lambda x: -float(x[1]["volume"])):
-        vol = float(agg["volume"])
-        share = int(round(100 * vol / total_vol))
-        flagged = int(agg["flagged"])
-        vol_label = f"{int(vol):,}"
-        exp_label = f"{int(vol / 1000)}k INR" if vol >= 1000 else f"{int(vol)} INR"
-        highlight = "high" if share >= 30 else ("medium" if share >= 15 else None)
-        rows.append(
-            {
-                "id": ch.lower(),
-                "channel": ch,
-                "volume": int(vol),
-                "volumeLabel": vol_label,
-                "sharePct": share,
-                "flaggedCount": flagged,
-                "exposureFlaggedLabel": exp_label,
-                **({"highlight": highlight} if highlight else {}),
-            }
-        )
-    if not rows:
-        rows = [
-            {
-                "id": "upi",
-                "channel": "UPI",
-                "volume": 0,
-                "volumeLabel": "0",
-                "sharePct": 0,
-                "flaggedCount": 0,
-                "exposureFlaggedLabel": "0 INR",
-            }
-        ]
-    return rows
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        by_ch: dict[str, dict[str, float | int]] = {}
+        for s in db.collection("transactions").limit(cap).stream():
+            if s.id == _SEED_DOC_ID:
+                continue
+            d = s.to_dict() or {}
+            ch = str(d.get("channel") or "UNKNOWN").upper()
+            amt = float(d.get("amount") or 0)
+            entry = by_ch.setdefault(ch, {"volume": 0.0, "flagged": 0})
+            entry["volume"] = float(entry["volume"]) + amt
+            if d.get("is_fraud") or d.get("risk_score"):
+                rs = d.get("risk_score")
+                if rs is not None and float(rs) > 0.5:
+                    entry["flagged"] = int(entry["flagged"]) + 1
+
+        total_vol = sum(float(v["volume"]) for v in by_ch.values()) or 1.0
+        rows: list[dict[str, Any]] = []
+        for ch, agg in sorted(by_ch.items(), key=lambda x: -float(x[1]["volume"])):
+            vol = float(agg["volume"])
+            share = int(round(100 * vol / total_vol))
+            flagged = int(agg["flagged"])
+            vol_label = f"{int(vol):,}"
+            exp_label = f"{int(vol / 1000)}k INR" if vol >= 1000 else f"{int(vol)} INR"
+            highlight = "high" if share >= 30 else ("medium" if share >= 15 else None)
+            rows.append(
+                {
+                    "id": ch.lower(),
+                    "channel": ch,
+                    "volume": int(vol),
+                    "volumeLabel": vol_label,
+                    "sharePct": share,
+                    "flaggedCount": flagged,
+                    "exposureFlaggedLabel": exp_label,
+                    **({"highlight": highlight} if highlight else {}),
+                }
+            )
+        if not rows:
+            rows = [
+                {
+                    "id": "upi",
+                    "channel": "UPI",
+                    "volume": 0,
+                    "volumeLabel": "0",
+                    "sharePct": 0,
+                    "flaggedCount": 0,
+                    "exposureFlaggedLabel": "0 INR",
+                }
+            ]
+        return rows
+
+    return _dashboard_cached("analytics:channel-exposure", compute)
 
 
 @router.get("/analytics/risk-volume")
 def analytics_risk_volume() -> list[dict[str, Any]]:
-    db = _firestore_db()
-    now = datetime.now(timezone.utc).date()
-    days = [(now - timedelta(days=i)) for i in range(6, -1, -1)]
-    buckets = {d.isoformat(): {"volume": 0.0, "alerts": 0, "high": 0} for d in days}
-    for s in db.collection("alerts").stream():
-        if s.id == _SEED_DOC_ID:
-            continue
-        d = s.to_dict() or {}
-        dt = _parse_ts(d.get("timestamp") or d.get("created_at"))
-        if not dt:
-            continue
-        key = dt.date().isoformat()
-        if key not in buckets:
-            continue
-        buckets[key]["volume"] += float(d.get("amount") or 0)
-        buckets[key]["alerts"] += 1
-        if str(d.get("risk_level") or "") == "high":
-            buckets[key]["high"] += 1
-    out: list[dict[str, Any]] = []
-    for d in days:
-        k = d.isoformat()
-        b = buckets[k]
-        vol = b["volume"]
-        alert_n = max(1, int(b["alerts"]))
-        risk_pct = int(round(100 * int(b["high"]) / alert_n))
-        out.append(
-            {
-                "label": d.strftime("%a"),
-                "volume": int(vol) if vol else int(500 + hash(k) % 400),
-                "riskPct": min(99, max(4, risk_pct if b["alerts"] else 8)),
-            }
-        )
-    return out
+    cap = _analytics_cap()
+
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        now = datetime.now(timezone.utc).date()
+        days = [(now - timedelta(days=i)) for i in range(6, -1, -1)]
+        buckets = {d.isoformat(): {"volume": 0.0, "alerts": 0, "high": 0} for d in days}
+        for s in db.collection("alerts").limit(cap).stream():
+            if s.id == _SEED_DOC_ID:
+                continue
+            d = s.to_dict() or {}
+            dt = _parse_ts(d.get("timestamp") or d.get("created_at"))
+            if not dt:
+                continue
+            key = dt.date().isoformat()
+            if key not in buckets:
+                continue
+            buckets[key]["volume"] += float(d.get("amount") or 0)
+            buckets[key]["alerts"] += 1
+            if str(d.get("risk_level") or "") == "high":
+                buckets[key]["high"] += 1
+        out: list[dict[str, Any]] = []
+        for d in days:
+            k = d.isoformat()
+            b = buckets[k]
+            vol = b["volume"]
+            alert_n = max(1, int(b["alerts"]))
+            risk_pct = int(round(100 * int(b["high"]) / alert_n))
+            out.append(
+                {
+                    "label": d.strftime("%a"),
+                    "volume": int(vol) if vol else int(500 + hash(k) % 400),
+                    "riskPct": min(99, max(4, risk_pct if b["alerts"] else 8)),
+                }
+            )
+        return out
+
+    return _dashboard_cached("analytics:risk-volume", compute)
 
 
 @router.get("/analytics/transactions-timeseries")
 def analytics_transactions_timeseries() -> list[dict[str, Any]]:
-    db = _firestore_db()
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(hours=24)
-    buckets = [{"total": 0, "highRisk": 0} for _ in range(24)]
-    for s in db.collection("transactions").limit(3000).stream():
-        if s.id == _SEED_DOC_ID:
-            continue
-        d = s.to_dict() or {}
-        dt = _parse_ts(d.get("timestamp"))
-        if not dt:
-            continue
-        dt = dt.astimezone(timezone.utc)
-        if dt < start.astimezone(timezone.utc):
-            continue
-        slot = int((dt - start.astimezone(timezone.utc)).total_seconds() // 3600)
-        if not (0 <= slot < 24):
-            continue
-        buckets[slot]["total"] += 1
-        rs = d.get("risk_score")
-        if rs is not None and float(rs) > 0.55:
-            buckets[slot]["highRisk"] += 1
-    points: list[dict[str, int]] = []
-    for i in range(24):
-        label = (start + timedelta(hours=i, minutes=30)).astimezone(timezone.utc).strftime("%H:%M")
-        b = buckets[i]
-        cleared = max(0, b["total"] - b["highRisk"])
-        points.append({"t": label, "total": b["total"], "highRisk": b["highRisk"], "cleared": cleared})
-    if sum(p["total"] for p in points) == 0:
-        return [
-            {"t": f"{i:02d}:00", "total": 2 + i % 5, "highRisk": i % 3, "cleared": max(0, (2 + i % 5) - (i % 3))}
-            for i in range(24)
-        ]
-    return points
+    cap = min(_analytics_cap(), 800)
+
+    def compute() -> list[dict[str, Any]]:
+        db = _firestore_db()
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(hours=24)
+        buckets = [{"total": 0, "highRisk": 0} for _ in range(24)]
+        for s in db.collection("transactions").limit(cap).stream():
+            if s.id == _SEED_DOC_ID:
+                continue
+            d = s.to_dict() or {}
+            dt = _parse_ts(d.get("timestamp"))
+            if not dt:
+                continue
+            dt = dt.astimezone(timezone.utc)
+            if dt < start.astimezone(timezone.utc):
+                continue
+            slot = int((dt - start.astimezone(timezone.utc)).total_seconds() // 3600)
+            if not (0 <= slot < 24):
+                continue
+            buckets[slot]["total"] += 1
+            rs = d.get("risk_score")
+            if rs is not None and float(rs) > 0.55:
+                buckets[slot]["highRisk"] += 1
+        points: list[dict[str, int]] = []
+        for i in range(24):
+            label = (start + timedelta(hours=i, minutes=30)).astimezone(timezone.utc).strftime("%H:%M")
+            b = buckets[i]
+            cleared = max(0, b["total"] - b["highRisk"])
+            points.append({"t": label, "total": b["total"], "highRisk": b["highRisk"], "cleared": cleared})
+        if sum(p["total"] for p in points) == 0:
+            return [
+                {"t": f"{i:02d}:00", "total": 2 + i % 5, "highRisk": i % 3, "cleared": max(0, (2 + i % 5) - (i % 3))}
+                for i in range(24)
+            ]
+        return points
+
+    return _dashboard_cached("analytics:transactions-timeseries", compute)
 
 
 # --- Graph + simulator ---

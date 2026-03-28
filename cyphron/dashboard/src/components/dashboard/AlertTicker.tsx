@@ -5,13 +5,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { alertRecordToTickerItem, fetchAlerts, getBackendBaseUrl } from "@/lib/api";
+import { useDashboardRealtime } from "@/lib/dashboardRealtimeContext";
 import type { AlertTickerItem } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 
 export function AlertTicker() {
   const backendOk = Boolean(getBackendBaseUrl());
+  const { reducePolling } = useDashboardRealtime();
   const { data: alerts = [] } = useSWR(backendOk ? "ticker-alerts" : null, () => fetchAlerts({ limit: 30 }), {
-    refreshInterval: 5000,
+    refreshInterval: reducePolling ? 90_000 : 5000,
   });
   const items: AlertTickerItem[] = alerts.length
     ? alerts.map(alertRecordToTickerItem)

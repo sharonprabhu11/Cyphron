@@ -15,6 +15,7 @@ import {
 
 import { DashboardCard } from "@/components/dashboard/DashboardCard";
 import { fetchTransactionsTimeseries, getBackendBaseUrl } from "@/lib/api";
+import { useDashboardRealtime } from "@/lib/dashboardRealtimeContext";
 import type { TimeSeriesPoint } from "@/lib/dashboard/types";
 
 const ChartInner = memo(function ChartInner({ data }: { data: TimeSeriesPoint[] }) {
@@ -62,10 +63,11 @@ const ChartInner = memo(function ChartInner({ data }: { data: TimeSeriesPoint[] 
 export function LiveTransactionsChart() {
   const [mounted, setMounted] = useState(false);
   const backendOk = Boolean(getBackendBaseUrl());
+  const { reducePolling } = useDashboardRealtime();
   const { data = [] } = useSWR(
     backendOk && mounted ? "tx-timeseries" : null,
     fetchTransactionsTimeseries,
-    { refreshInterval: 8000 }
+    { refreshInterval: reducePolling ? 90_000 : 8000 }
   );
   const chartData: TimeSeriesPoint[] =
     data.length > 0

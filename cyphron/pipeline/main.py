@@ -10,6 +10,8 @@ Graph, features, and other stages can be wired here later.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
 import sys
 import threading
@@ -19,15 +21,24 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from pipeline.config import ENABLE_GCP_STARTUP, cors_origins
+from pipeline.config import (
+    ENABLE_GCP_STARTUP,
+    cors_origins,
+    enable_firestore_realtime,
+    ws_max_connections,
+)
 from pipeline.dashboard_api import router as dashboard_v1_router
 from pipeline.db import create_dummy_collections, init_bigquery, init_firestore
 from pipeline.decision.api import router as decision_router
 from pipeline.graph.neo4j_client import get_neo4j_client, initialize_neo4j
+from pipeline.realtime.dashboard_realtime import (
+    dashboard_realtime_hub,
+    start_firestore_watchers,
+)
 from pipeline.services import DecisionService
 
 # Default 8810 avoids common 8000/8001 conflicts; override with PIPELINE_PORT or PORT.
@@ -39,12 +50,20 @@ HOST = os.getenv("PIPELINE_HOST", "0.0.0.0")
 async def lifespan(app: FastAPI):
     print("Initializing pipeline services...", flush=True)
 
+    loop = asyncio.get_running_loop()
+    dashboard_realtime_hub.set_event_loop(loop)
+
     if ENABLE_GCP_STARTUP:
         try:
             init_firestore()
             create_dummy_collections()
             init_bigquery()
             print("GCP sinks ready", flush=True)
+            if enable_firestore_realtime():
+                from firebase_admin import firestore
+
+                start_firestore_watchers(firestore.client())
+                print("Dashboard Firestore snapshot listeners started", flush=True)
         except Exception as exc:
             print(f"GCP startup skipped: {exc}", flush=True)
     else:
@@ -63,6 +82,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await dashboard_realtime_hub.shutdown_sockets()
+
 
 app = FastAPI(title="Cyphron Pipeline Backend", lifespan=lifespan)
 app.add_middleware(
@@ -79,6 +100,33 @@ app.include_router(dashboard_v1_router, prefix="/api/v1")
 @app.get("/")
 def root():
     return {"message": "Cyphron backend running"}
+
+
+@app.websocket("/ws/dashboard")
+async def dashboard_websocket(websocket: WebSocket) -> None:
+    """Minimal push channel: Firestore listeners send debounced `{kind: refresh}` pings."""
+    if not enable_firestore_realtime():
+        await websocket.accept()
+        await websocket.send_text(
+            json.dumps({"v": 1, "kind": "hello", "realtime": False}, separators=(",", ":"))
+        )
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        return
+
+    registered = await dashboard_realtime_hub.connect(websocket, ws_max_connections())
+    if not registered:
+        return
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await dashboard_realtime_hub.disconnect(websocket)
 
 
 def run_ingestion() -> None:

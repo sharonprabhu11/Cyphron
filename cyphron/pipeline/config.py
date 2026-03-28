@@ -57,3 +57,67 @@ INGESTION_ALERT_INCLUDE_MEDIUM = env_bool("INGESTION_ALERT_INCLUDE_MEDIUM", Fals
 def cors_origins() -> list[str]:
     raw = env("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000") or ""
     return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def firestore_analytics_doc_cap() -> int:
+    """Max documents read per collection scan in dashboard analytics (saves quota)."""
+    raw = env("FIRESTORE_ANALYTICS_DOC_CAP", "400")
+    try:
+        return max(50, min(2000, int(raw or "400")))
+    except ValueError:
+        return 400
+
+
+def firestore_list_alerts_fetch_cap() -> int:
+    """Max alert documents loaded when listing (before filter/sort in memory)."""
+    raw = env("FIRESTORE_LIST_ALERTS_FETCH_CAP", "280")
+    try:
+        return max(50, min(500, int(raw or "280")))
+    except ValueError:
+        return 280
+
+
+def dashboard_firestore_cache_seconds() -> float:
+    """TTL for identical dashboard REST responses (0 = disable)."""
+    raw = env("DASHBOARD_FIRESTORE_CACHE_SECONDS", "20")
+    try:
+        return max(0.0, float(raw or "20"))
+    except ValueError:
+        return 20.0
+
+
+def enable_firestore_realtime() -> bool:
+    """Firestore snapshot listeners + WebSocket push (single API instance)."""
+    return env_bool("ENABLE_FIRESTORE_REALTIME", True)
+
+
+def firestore_listener_alert_limit() -> int:
+    raw = env("FIRESTORE_LISTENER_ALERT_LIMIT", "180")
+    try:
+        return max(20, min(500, int(raw or "180")))
+    except ValueError:
+        return 180
+
+
+def firestore_listener_transaction_limit() -> int:
+    raw = env("FIRESTORE_LISTENER_TRANSACTION_LIMIT", "120")
+    try:
+        return max(20, min(500, int(raw or "120")))
+    except ValueError:
+        return 120
+
+
+def ws_broadcast_debounce_ms() -> int:
+    raw = env("WS_BROADCAST_DEBOUNCE_MS", "400")
+    try:
+        return max(50, min(5000, int(raw or "400")))
+    except ValueError:
+        return 400
+
+
+def ws_max_connections() -> int:
+    raw = env("WS_MAX_CONNECTIONS", "80")
+    try:
+        return max(1, min(500, int(raw or "80")))
+    except ValueError:
+        return 80

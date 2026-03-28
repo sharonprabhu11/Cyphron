@@ -16,22 +16,29 @@ import {
   fetchRiskVolume,
   getBackendBaseUrl,
 } from "@/lib/api";
+import { useDashboardRealtime } from "@/lib/dashboardRealtimeContext";
 
 export function DashboardHomeClient() {
   const backendOk = Boolean(getBackendBaseUrl());
+  const { reducePolling } = useDashboardRealtime();
+  const pollFast = 12_000;
+  const pollSlow = 90_000;
+  const homeIv = reducePolling ? pollSlow : pollFast;
+  const otherIv = reducePolling ? pollSlow : 15_000;
+
   const { data: summary = [], error: summaryError } = useSWR(
     backendOk ? "dash-summary" : null,
     fetchAnalyticsSummary,
-    { refreshInterval: 12_000 }
+    { refreshInterval: homeIv }
   );
   const { data: fraudSignals = [] } = useSWR(backendOk ? "dash-fraud" : null, fetchFraudSignals, {
-    refreshInterval: 15_000,
+    refreshInterval: otherIv,
   });
   const { data: categoryRows = [] } = useSWR(backendOk ? "dash-channels" : null, fetchChannelExposure, {
-    refreshInterval: 15_000,
+    refreshInterval: otherIv,
   });
   const { data: riskVolume = [] } = useSWR(backendOk ? "dash-risk-vol" : null, fetchRiskVolume, {
-    refreshInterval: 15_000,
+    refreshInterval: otherIv,
   });
 
   const displaySummary =

@@ -19,6 +19,13 @@ def env(name: str, default: str | None = None) -> str | None:
     return os.getenv(name, default)
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 GOOGLE_APPLICATION_CREDENTIALS = env("GOOGLE_APPLICATION_CREDENTIALS", "")
 BIGQUERY_DATASET = env("BIGQUERY_DATASET", "cyphron_dw")
 
@@ -32,3 +39,13 @@ REDIS_URL = env("REDIS_URL", "redis://localhost:6379")
 GCP_PROJECT_ID = env("GCP_PROJECT_ID")
 PUBSUB_TOPIC = env("PUBSUB_TOPIC")
 PUBSUB_SUBSCRIPTION = env("PUBSUB_SUBSCRIPTION")
+
+MODEL_ARTIFACT_PATH = env(
+    "GRAPH_MODEL_PATH",
+    str(_CYPHRON_ROOT / "pipeline" / "ml" / "artifacts" / "graphsage_model.pt"),
+)
+PROCESSED_GRAPH_PATH = env(
+    "PROCESSED_GRAPH_PATH",
+    str(_CYPHRON_ROOT / "ml_training" / "data" / "processed_graph.npz"),
+)
+ENABLE_GCP_STARTUP = env_bool("ENABLE_GCP_STARTUP", True)

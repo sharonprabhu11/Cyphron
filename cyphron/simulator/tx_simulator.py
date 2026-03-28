@@ -2,9 +2,13 @@
 Synthetic transaction generators for the Cyphron simulator and pipeline publisher.
 """
 
+from __future__ import annotations
+
+import csv
 import hashlib
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 CHANNELS = ["UPI", "ATM", "WEB", "MOBILE"]
@@ -36,70 +40,113 @@ def generate_session():
 
 
 def generate_timestamp(offset_seconds=0):
-    return (datetime.utcnow() + timedelta(seconds=offset_seconds)).isoformat()
+    return (datetime.now(timezone.utc) + timedelta(seconds=offset_seconds)).isoformat()
+
+
+def _base_transaction(
+    *,
+    transaction_id: str,
+    account_id: str,
+    recipient_id: str,
+    amount: float,
+    timestamp: str,
+    channel: str,
+    tx_type: str = "TRANSFER",
+    device_fingerprint: str,
+    ip_address: str,
+    phone_number: str | None,
+    session_id: str,
+    geo_hash: str | None,
+    merchant_id: str | None = None,
+    entity_id: str | None = None,
+    cluster_id: str | None = None,
+    velocity_score: float | None = None,
+    hop_count: int | None = None,
+    risk_score: float | None = None,
+    rule_flags: list[str] | None = None,
+    behavior_signature: str | None = None,
+    status: str = "PENDING",
+    str_generated: bool = False,
+    is_fraud: bool = False,
+) -> dict[str, object]:
+    return {
+        "transaction_id": transaction_id,
+        "account_id": account_id,
+        "recipient_id": recipient_id,
+        "amount": round(float(amount), 2),
+        "currency": "INR",
+        "timestamp": timestamp,
+        "channel": channel,
+        "tx_type": tx_type,
+        "device_fingerprint": device_fingerprint,
+        "ip_address": ip_address,
+        "phone_number": phone_number,
+        "session_id": session_id,
+        "geo_hash": geo_hash,
+        "merchant_id": merchant_id,
+        "entity_id": entity_id or account_id,
+        "cluster_id": cluster_id,
+        "velocity_score": velocity_score,
+        "hop_count": hop_count,
+        "risk_score": risk_score,
+        "rule_flags": rule_flags or [],
+        "behavior_signature": behavior_signature,
+        "status": status,
+        "str_generated": str_generated,
+        "is_fraud": is_fraud,
+    }
 
 
 def generate_normal_tx():
-    return {
-        "transaction_id": generate_tx_id(),
-        "account_id": generate_account(),
-        "recipient_id": generate_account(),
-        "amount": round(random.uniform(100, 5000), 2),
-        "currency": "INR",
-        "timestamp": generate_timestamp(),
-        "channel": random.choice(CHANNELS),
-        "tx_type": "TRANSFER",
-        "device_fingerprint": generate_device_fingerprint(str(random.random())),
-        "ip_address": generate_ip(),
-        "phone_number": generate_phone(),
-        "session_id": generate_session(),
-        "geo_hash": random.choice(["dr5ru", "dr5rv", "dr5rw"]),
-        "merchant_id": None,
-        "entity_id": None,
-        "cluster_id": None,
-        "velocity_score": None,
-        "hop_count": None,
-        "risk_score": None,
-        "rule_flags": None,
-        "behavior_signature": None,
-        "status": "PENDING",
-        "str_generated": False,
-    }
+    account_id = generate_account()
+    return _base_transaction(
+        transaction_id=generate_tx_id(),
+        account_id=account_id,
+        recipient_id=generate_account(),
+        amount=random.uniform(100, 5000),
+        timestamp=generate_timestamp(),
+        channel=random.choice(CHANNELS),
+        device_fingerprint=generate_device_fingerprint(str(random.random())),
+        ip_address=generate_ip(),
+        phone_number=generate_phone(),
+        session_id=generate_session(),
+        geo_hash=random.choice(["dr5ru", "dr5rv", "dr5rw"]),
+        entity_id=account_id,
+        risk_score=0.05,
+        behavior_signature="normal",
+    )
 
 
 def generate_fanout_fraud():
     base_account = generate_account()
     shared_device = generate_device_fingerprint("fraud_device")
     shared_session = "SES_FRAUD01"
+    cluster_id = "FRAUD-FANOUT-01"
 
     txs = []
     for i in range(6):
         txs.append(
-            {
-                "transaction_id": generate_tx_id(),
-                "account_id": base_account,
-                "recipient_id": generate_account(),
-                "amount": 60000,
-                "currency": "INR",
-                "timestamp": generate_timestamp(i),
-                "channel": random.choice(CHANNELS),
-                "tx_type": "TRANSFER",
-                "device_fingerprint": shared_device,
-                "ip_address": "192.168.1.100",
-                "phone_number": generate_phone(),
-                "session_id": shared_session,
-                "geo_hash": "dr5ru",
-                "merchant_id": None,
-                "entity_id": None,
-                "cluster_id": None,
-                "velocity_score": None,
-                "hop_count": None,
-                "risk_score": None,
-                "rule_flags": None,
-                "behavior_signature": None,
-                "status": "PENDING",
-                "str_generated": False,
-            }
+            _base_transaction(
+                transaction_id=generate_tx_id(),
+                account_id=base_account,
+                recipient_id=generate_account(),
+                amount=60_000,
+                timestamp=generate_timestamp(i),
+                channel=random.choice(CHANNELS),
+                device_fingerprint=shared_device,
+                ip_address="192.168.1.100",
+                phone_number=generate_phone(),
+                session_id=shared_session,
+                geo_hash="dr5ru",
+                entity_id=base_account,
+                cluster_id=cluster_id,
+                velocity_score=9.5,
+                hop_count=1,
+                risk_score=0.95,
+                rule_flags=["fan_out"],
+                behavior_signature="fanout_ring",
+                is_fraud=True,
+            )
         )
     return txs
 
@@ -107,34 +154,92 @@ def generate_fanout_fraud():
 def generate_structuring_fraud():
     account = generate_account()
     device = generate_device_fingerprint("struct_device")
+    cluster_id = "FRAUD-STRUCT-01"
 
     txs = []
     for i in range(5):
         txs.append(
-            {
-                "transaction_id": generate_tx_id(),
-                "account_id": account,
-                "recipient_id": generate_account(),
-                "amount": random.choice([49800, 49900, 49750]),
-                "currency": "INR",
-                "timestamp": generate_timestamp(i * 10),
-                "channel": "UPI",
-                "tx_type": "TRANSFER",
-                "device_fingerprint": device,
-                "ip_address": "192.168.1.200",
-                "phone_number": generate_phone(),
-                "session_id": "SES_STRUCT01",
-                "geo_hash": "dr5rv",
-                "merchant_id": None,
-                "entity_id": None,
-                "cluster_id": None,
-                "velocity_score": None,
-                "hop_count": None,
-                "risk_score": None,
-                "rule_flags": None,
-                "behavior_signature": None,
-                "status": "PENDING",
-                "str_generated": False,
-            }
+            _base_transaction(
+                transaction_id=generate_tx_id(),
+                account_id=account,
+                recipient_id=generate_account(),
+                amount=random.choice([49_800, 49_900, 49_750]),
+                timestamp=generate_timestamp(i * 10),
+                channel="UPI",
+                device_fingerprint=device,
+                ip_address="192.168.1.200",
+                phone_number=generate_phone(),
+                session_id="SES_STRUCT01",
+                geo_hash="dr5rv",
+                entity_id=account,
+                cluster_id=cluster_id,
+                velocity_score=6.0,
+                hop_count=1,
+                risk_score=0.88,
+                rule_flags=["structuring"],
+                behavior_signature="structuring_pattern",
+                is_fraud=True,
+            )
         )
     return txs
+
+
+def generate_layering_fraud():
+    accounts = [generate_account() for _ in range(4)]
+    cluster_id = "FRAUD-LAYER-01"
+    txs = []
+    for index in range(3):
+        txs.append(
+            _base_transaction(
+                transaction_id=generate_tx_id(),
+                account_id=accounts[index],
+                recipient_id=accounts[index + 1],
+                amount=75_000 - (index * 500),
+                timestamp=generate_timestamp(index * 15),
+                channel=random.choice(["WEB", "MOBILE", "UPI"]),
+                device_fingerprint=generate_device_fingerprint(f"layer-{index}"),
+                ip_address=f"192.168.2.{100 + index}",
+                phone_number=generate_phone(),
+                session_id=f"SES_LAYER_{index}",
+                geo_hash="dr5rw",
+                entity_id=accounts[index],
+                cluster_id=cluster_id,
+                velocity_score=4.0,
+                hop_count=index + 1,
+                risk_score=0.92,
+                rule_flags=["layering"],
+                behavior_signature="layering_chain",
+                is_fraud=True,
+            )
+        )
+    return txs
+
+
+def generate_dataset(
+    *,
+    normal_count: int = 300,
+    fanout_batches: int = 5,
+    structuring_batches: int = 5,
+    layering_batches: int = 5,
+) -> list[dict[str, object]]:
+    rows = [generate_normal_tx() for _ in range(normal_count)]
+    for _ in range(fanout_batches):
+        rows.extend(generate_fanout_fraud())
+    for _ in range(structuring_batches):
+        rows.extend(generate_structuring_fraud())
+    for _ in range(layering_batches):
+        rows.extend(generate_layering_fraud())
+    rows.sort(key=lambda row: str(row["timestamp"]))
+    return rows
+
+
+def export_dataset_csv(path: str | Path, **kwargs: int) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = generate_dataset(**kwargs)
+    fieldnames = list(rows[0].keys()) if rows else []
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    return output_path

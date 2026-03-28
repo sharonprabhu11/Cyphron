@@ -1,0 +1,8 @@
+{
+  "test_f1": 1.0,
+  "test_accuracy": 1.0,
+  "positives_in_test": 15,
+  "checkpoint": "pipeline/ml/artifacts/graphsage_model.pt",
+  "num_nodes": 474,
+  "num_edges": 1268
+}

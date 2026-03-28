@@ -6,6 +6,8 @@ import os
 from google.cloud import pubsub_v1
 
 from pipeline import config
+from pipeline.graph.neo4j_client import initialize_neo4j
+from pipeline.graph.upsert import upsert_transaction_graph
 from pipeline.ingestion.schema import Transaction
 
 if config.GOOGLE_APPLICATION_CREDENTIALS:
@@ -24,6 +26,9 @@ subscription_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_ID)
 def process_transaction(tx: Transaction) -> None:
     print(f"\nReceived TX: {tx.transaction_id}")
     print(f"From {tx.account_id} -> {tx.recipient_id} | {tx.amount} {tx.currency}")
+    client = initialize_neo4j()
+    if client is not None:
+        upsert_transaction_graph(client, tx.model_dump())
 
 
 def callback(message: pubsub_v1.subscriber.message.Message) -> None:

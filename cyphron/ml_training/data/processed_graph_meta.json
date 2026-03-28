@@ -1,0 +1,29 @@
+{
+  "num_nodes": 474,
+  "num_edges": 1268,
+  "num_features": 20,
+  "num_positive_labels": 82,
+  "feature_names": [
+    "out_tx_count",
+    "in_tx_count",
+    "total_out_amount",
+    "total_in_amount",
+    "avg_out_amount",
+    "avg_in_amount",
+    "unique_recipients",
+    "unique_senders",
+    "fan_out_ratio",
+    "fan_in_ratio",
+    "near_threshold_out_count",
+    "shared_device_accounts",
+    "shared_ip_accounts",
+    "shared_phone_accounts",
+    "shared_session_accounts",
+    "burst_tx_per_minute",
+    "upi_ratio",
+    "atm_ratio",
+    "web_ratio",
+    "mobile_ratio"
+  ],
+  "input_path": "ml_training/data/transactions.csv"
+}

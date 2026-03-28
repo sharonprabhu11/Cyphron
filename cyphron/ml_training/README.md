@@ -32,3 +32,10 @@ Training writes:
 - GraphSAGE is still the main model.
 - SHAP is used for feature attribution on top of the trained model.
 - The IBM dataset is static and public, but still synthetic, which is normal for AML research because real bank AML data is rarely public.
+## Cyphron ML Training (Scaffold)
+
+This folder is a **placeholder** for offline model training pipelines.
+
+- No real preprocessing/training logic yet
+- Files exist to establish structure and future entrypoints
+

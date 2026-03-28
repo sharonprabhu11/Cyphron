@@ -8,6 +8,8 @@ Cyphron pipeline entrypoint.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
 import sys
 import threading
@@ -36,12 +38,20 @@ CORS_ORIGINS = [origin.strip() for origin in (FRONTEND_ORIGINS or "").split(",")
 async def lifespan(app: FastAPI):
     print("Initializing pipeline services...", flush=True)
 
+    loop = asyncio.get_running_loop()
+    dashboard_realtime_hub.set_event_loop(loop)
+
     if ENABLE_GCP_STARTUP:
         try:
             init_firestore()
             create_dummy_collections()
             init_bigquery()
             print("GCP sinks ready", flush=True)
+            if enable_firestore_realtime():
+                from firebase_admin import firestore
+
+                start_firestore_watchers(firestore.client())
+                print("Dashboard Firestore snapshot listeners started", flush=True)
         except Exception as exc:
             print(f"GCP startup skipped: {exc}", flush=True)
     else:
@@ -60,6 +70,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    await dashboard_realtime_hub.shutdown_sockets()
+
 
 app = FastAPI(title="Cyphron Pipeline Backend", lifespan=lifespan)
 app.add_middleware(
@@ -70,6 +82,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(decision_router)
+app.include_router(dashboard_v1_router, prefix="/api/v1")
 
 
 @app.get("/")
@@ -77,8 +90,35 @@ def root():
     return {"message": "Cyphron backend running"}
 
 
+@app.websocket("/ws/dashboard")
+async def dashboard_websocket(websocket: WebSocket) -> None:
+    """Minimal push channel: Firestore listeners send debounced `{kind: refresh}` pings."""
+    if not enable_firestore_realtime():
+        await websocket.accept()
+        await websocket.send_text(
+            json.dumps({"v": 1, "kind": "hello", "realtime": False}, separators=(",", ":"))
+        )
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        return
+
+    registered = await dashboard_realtime_hub.connect(websocket, ws_max_connections())
+    if not registered:
+        return
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await dashboard_realtime_hub.disconnect(websocket)
+
+
 def run_ingestion() -> None:
-    """Run simulator publisher and Pub/Sub subscriber."""
+    """Run simulator publisher and Pub/Sub subscriber (Transaction schema enforced in subscriber)."""
     import pipeline.ingestion.schema  # noqa: F401
 
     from pipeline.ingestion import publisher as ingestion_publisher
@@ -98,8 +138,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Cyphron pipeline")
     sub = parser.add_subparsers(dest="command")
 
-    sub.add_parser("serve", help="Run FastAPI backend (default if no subcommand)")
+    sub.add_parser("serve", help="Run FastAPI + DB init (default if no subcommand)")
     sub.add_parser("ingestion", help="Run Pub/Sub ingestion (publisher + subscriber)")
+
     return parser
 
 
@@ -111,16 +152,16 @@ def main_cli(argv: list[str] | None = None) -> None:
         argv = ["serve"]
 
     args = parser.parse_args(argv)
-    if args.command == "serve":
+    cmd = args.command
+
+    if cmd == "serve":
         print(f"Binding backend on http://{HOST}:{PORT}", flush=True)
         uvicorn.run("pipeline.main:app", host=HOST, port=PORT, reload=False)
-        return
-    if args.command == "ingestion":
+    elif cmd == "ingestion":
         run_ingestion()
-        return
-
-    parser.print_help()
-    raise SystemExit(2)
+    else:
+        parser.print_help()
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

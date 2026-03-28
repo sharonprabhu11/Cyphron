@@ -53,6 +53,20 @@ RETURN src.account_id AS source_account_id,
 """
 
 
+# {hops} is expanded in Python (1–5) because some Cypher parsers reject parameterized path bounds.
+SUBGRAPH_QUERY = """
+MATCH (center:Account {{account_id: $account_id}})
+MATCH p = (center)-[:TRANSFERRED_TO*1..{hops}]-(n:Account)
+UNWIND relationships(p) AS r
+RETURN DISTINCT startNode(r).account_id AS source,
+       endNode(r).account_id AS target,
+       r.txn_id AS txn_id,
+       r.amount AS amount,
+       r.channel AS channel
+LIMIT $limit
+"""
+
+
 FAN_OUT_QUERY = """
 MATCH (src:Account)-[tx:TRANSFERRED_TO]->(dst:Account)
 WHERE tx.timestamp >= datetime() - duration($window)

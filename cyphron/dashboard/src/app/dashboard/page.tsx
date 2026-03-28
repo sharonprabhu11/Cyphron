@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 export default function DashboardIndexPage() {
   return (
     <main style={{ padding: 24 }}>
@@ -7,3 +8,12 @@ export default function DashboardIndexPage() {
   );
 }
 
+=======
+"use client";
+
+import { DashboardHomeClient } from "@/components/dashboard/DashboardHomeClient";
+
+export default function DashboardHomePage() {
+  return <DashboardHomeClient />;
+}
+>>>>>>> pr-7

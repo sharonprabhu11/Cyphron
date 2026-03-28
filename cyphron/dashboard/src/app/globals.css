@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Cyphron: RGB channel triples for rgb(var(--*) / alpha) utilities (surface, ink, brand.*).
+  shadcn: HSL components for hsl(var(--*) / alpha) — matches same blue/green-forward palette.
+*/
+:root {
+  /* Milk white canvas */
+  --surface: 252 251 248;
+  --surface-muted: 247 245 240;
+  --ink: 15 40 35;
+  --ink-muted: 80 110 100;
+  --accent-green: 22 163 74;
+  --accent-green-muted: 187 247 208;
+  --accent-blue: 59 130 246;
+  --accent-blue-muted: 191 219 254;
+  --accent-red: 220 38 38;
+  --accent-yellow: 202 138 4;
+
+  --background: 40 20% 98%;
+  --foreground: 168 45% 11%;
+  --card: 40 25% 98%;
+  --card-foreground: 168 45% 11%;
+  --popover: 40 25% 98%;
+  --popover-foreground: 168 45% 11%;
+  --primary: 217 91% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 152 18% 92%;
+  --secondary-foreground: 168 40% 18%;
+  --muted: 152 22% 94%;
+  --muted-foreground: 160 12% 38%;
+  --accent: 152 30% 93%;
+  --accent-foreground: 168 45% 18%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 160 14% 90%;
+  --input: 160 14% 90%;
+  --ring: 217 91% 53%;
+  --radius: 1rem;
+}
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+  --surface: 24 24 27;
+  --surface-muted: 15 23 18;
+  --ink: 236 252 245;
+  --ink-muted: 130 155 140;
+  --accent-green: 74 222 128;
+  --accent-green-muted: 22 101 52;
+  --accent-blue: 96 165 250;
+  --accent-blue-muted: 30 58 138;
+  --accent-red: 248 113 113;
+  --accent-yellow: 250 204 21;
+
+  --background: 160 8% 8%;
+  --foreground: 150 15% 96%;
+  --card: 160 6% 12%;
+  --card-foreground: 150 15% 96%;
+  --popover: 160 6% 10%;
+  --popover-foreground: 150 15% 96%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 160 8% 16%;
+  --secondary-foreground: 150 15% 92%;
+  --muted: 160 8% 18%;
+  --muted-foreground: 150 10% 65%;
+  --accent: 160 10% 20%;
+  --accent-foreground: 150 15% 92%;
+  --destructive: 0 62% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 160 8% 22%;
+  --input: 160 8% 22%;
+  --ring: 217 91% 55%;
+}
+
+body {
+  min-height: 100vh;
+  background-color: rgb(var(--surface));
+  color: rgb(var(--ink));
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html.dark body {
+  background-color: hsl(var(--background));
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border) / 1);
+  }
+}
+
+/* STR report: cleaner print (toolbar hidden via Tailwind print:hidden on controls). */
+@media print {
+  .str-report-print-root pre {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,6 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
         "cluster_id",
         "rule_flags",
         "behavior_signature",
-        "scenario_id",
     ]:
         if column not in working.columns:
             working[column] = None

@@ -103,6 +103,55 @@ class Neo4jGraphClient:
         )
         return [dict(record) for record in records]
 
+    def fetch_subgraph(
+        self,
+        *,
+        account_id: str,
+        hops: int = 2,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        h = min(max(int(hops), 1), 5)
+        query = queries.SUBGRAPH_QUERY.format(hops=h)
+        records, _, _ = self._execute_query(
+            query,
+            {"account_id": account_id, "limit": int(limit)},
+        )
+        nodes: dict[str, dict[str, Any]] = {}
+        links: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for row in records:
+            src = row.get("source")
+            dst = row.get("target")
+            if not src or not dst:
+                continue
+            tid = str(row.get("txn_id") or "")
+            key = (str(src), str(dst), tid)
+            if key in seen:
+                continue
+            seen.add(key)
+            sid, did = str(src), str(dst)
+            nodes.setdefault(sid, {"id": sid, "label": "Account"})
+            nodes.setdefault(did, {"id": did, "label": "Account"})
+            links.append(
+                {
+                    "source": sid,
+                    "target": did,
+                    "id": tid,
+                    "amount": row.get("amount"),
+                    "channel": row.get("channel"),
+                }
+            )
+        if not nodes:
+            recs, _, _ = self._execute_query(
+                "MATCH (c:Account {account_id: $account_id}) RETURN c.account_id AS id LIMIT 1",
+                {"account_id": account_id},
+            )
+            if recs and recs[0].get("id"):
+                i = str(recs[0]["id"])
+                return {"nodes": [{"id": i, "label": "Account"}], "links": []}
+            return {"nodes": [], "links": []}
+        return {"nodes": list(nodes.values()), "links": links}
+
     def run_layering_query(
         self,
         *,

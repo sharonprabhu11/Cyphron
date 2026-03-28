@@ -85,9 +85,9 @@ def decide(transaction: Transaction, request: Request) -> DecisionResponse:
     service = _get_decision_service(request)
     base_response: DecisionResponse = service.decide(transaction)
     if base_response.risk_tier != "CRITICAL":
-        _append_history_safely(transaction, base_response)
         store_decision_result(transaction, base_response)
         return base_response
+    return attach_str_pdf_to_response(base_response, transaction)
 
     reasons = [factor.detail for factor in base_response.top_factors if factor.detail]
     if not reasons:
@@ -112,6 +112,5 @@ def decide(transaction: Transaction, request: Request) -> DecisionResponse:
         "str_report": str_text,
         "pdf_path": pdf_path,
     })
-    _append_history_safely(transaction, response)
     store_decision_result(transaction, response)
     return response

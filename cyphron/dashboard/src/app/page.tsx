@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 "use client";
 
 export default function HomePage() {
@@ -13,3 +14,10 @@ export default function HomePage() {
   );
 }
 
+=======
+import { redirect } from "next/navigation";
+
+export default function HomePage() {
+  redirect("/dashboard");
+}
+>>>>>>> pr-7

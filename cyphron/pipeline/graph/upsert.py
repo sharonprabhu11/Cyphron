@@ -4,7 +4,7 @@ Graph upsert helpers for transaction events.
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from pipeline.graph.neo4j_client import Neo4jGraphClient
@@ -14,11 +14,19 @@ def _normalize_tx_payload(event: dict[str, Any]) -> dict[str, Any]:
     created_at = event.get("created_at")
     if hasattr(created_at, "astimezone"):
         created_at = created_at.astimezone(timezone.utc).isoformat()
+    elif created_at is None:
+        created_at = datetime.now(timezone.utc).isoformat()
 
     user_id = event.get("user_id") or event.get("source_account_id")
+    if not user_id:
+        raise ValueError("Transaction event must include user_id or source_account_id")
+
+    txn_id = event.get("id")
+    if not txn_id:
+        raise ValueError("Transaction event must include id")
 
     return {
-        "txn_id": event["id"],
+        "txn_id": txn_id,
         "source_account_id": user_id,
         "destination_account_id": event.get("destination_account_id") or event.get("merchant") or "EXTERNAL_SINK",
         "amount": float(event["amount"]),

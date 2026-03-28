@@ -65,3 +65,4 @@ TRAINING_HISTORY_PATH = env(
     str(_CYPHRON_ROOT / "ml_training" / "data" / "transactions.csv"),
 )
 ENABLE_GCP_STARTUP = env_bool("ENABLE_GCP_STARTUP", True)
+

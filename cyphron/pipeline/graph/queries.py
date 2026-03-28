@@ -56,6 +56,7 @@ RETURN src.account_id AS source_account_id,
 FAN_OUT_QUERY = """
 MATCH (src:Account)-[tx:TRANSFERRED_TO]->(dst:Account)
 WHERE tx.timestamp >= datetime() - duration($window)
+  AND ($account_prefix IS NULL OR src.account_id STARTS WITH $account_prefix)
 WITH src, count(DISTINCT dst) AS recipient_count, collect(DISTINCT dst.account_id) AS recipients
 WHERE recipient_count >= $min_recipients
 RETURN src.account_id AS account_id, recipient_count, recipients
@@ -67,6 +68,7 @@ LIMIT $limit
 STRUCTURING_QUERY = """
 MATCH (src:Account)-[tx:TRANSFERRED_TO]->(:Account)
 WHERE tx.timestamp >= datetime() - duration($window)
+  AND ($account_prefix IS NULL OR src.account_id STARTS WITH $account_prefix)
   AND tx.amount >= $lower_bound
   AND tx.amount < $upper_bound
 WITH src,
@@ -83,9 +85,17 @@ LIMIT $limit
 SHARED_DEVICE_QUERY = """
 MATCH (a1:Account)-[:USES_DEVICE]->(d:Device)<-[:USES_DEVICE]-(a2:Account)
 WHERE a1.account_id < a2.account_id
+  AND (
+    $account_prefix IS NULL
+    OR a1.account_id STARTS WITH $account_prefix
+    OR a2.account_id STARTS WITH $account_prefix
+  )
+WITH d, collect(DISTINCT a1.account_id) + collect(DISTINCT a2.account_id) AS raw_account_ids
+UNWIND raw_account_ids AS account_id
+WITH d, collect(DISTINCT account_id) AS account_ids
 RETURN d.device_id AS device_id,
-       collect(DISTINCT a1.account_id) + collect(DISTINCT a2.account_id) AS account_ids,
-       count(DISTINCT a1) + count(DISTINCT a2) AS linked_accounts
+       account_ids,
+       size(account_ids) AS linked_accounts
 ORDER BY linked_accounts DESC
 LIMIT $limit
 """
@@ -96,7 +106,12 @@ MATCH path = (origin:Account)-[t1:TRANSFERRED_TO]->(:Account)-[t2:TRANSFERRED_TO
 WHERE t1.timestamp >= datetime() - duration($window)
   AND t2.timestamp >= datetime() - duration($window)
   AND t3.timestamp >= datetime() - duration($window)
-  AND duration.between(t1.timestamp, t3.timestamp) <= duration($max_total_gap)
+  AND (
+    $account_prefix IS NULL
+    OR origin.account_id STARTS WITH $account_prefix
+    OR beneficiary.account_id STARTS WITH $account_prefix
+  )
+  AND t3.timestamp <= t1.timestamp + duration($max_total_gap)
 RETURN origin.account_id AS origin_account_id,
        beneficiary.account_id AS beneficiary_account_id,
        [node IN nodes(path) | node.account_id] AS hop_accounts

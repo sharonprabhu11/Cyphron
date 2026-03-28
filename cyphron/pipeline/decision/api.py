@@ -17,10 +17,19 @@ from pipeline.compliance.storage import (
 from pipeline.compliance.pdf_renderer import render_pdf
 from pipeline.compliance.str_generator import generate_str
 from pipeline.ingestion.schema import Transaction
+from pipeline.ml.history import append_training_history
 from pipeline.models import DecisionResponse, HealthResponse
 
 
 router = APIRouter()
+
+
+def _append_history_safely(transaction: Transaction, decision: DecisionResponse) -> None:
+    try:
+        path = append_training_history(transaction, decision)
+        print(f"Training history appended at {path}", flush=True)
+    except Exception as exc:
+        print(f"Training history append failed: {exc}", flush=True)
 
 
 def _get_decision_service(request: Request):
@@ -76,6 +85,7 @@ def decide(transaction: Transaction, request: Request) -> DecisionResponse:
     service = _get_decision_service(request)
     base_response: DecisionResponse = service.decide(transaction)
     if base_response.risk_tier != "CRITICAL":
+        _append_history_safely(transaction, base_response)
         store_decision_result(transaction, base_response)
         return base_response
 
@@ -102,5 +112,6 @@ def decide(transaction: Transaction, request: Request) -> DecisionResponse:
         "str_report": str_text,
         "pdf_path": pdf_path,
     })
+    _append_history_safely(transaction, response)
     store_decision_result(transaction, response)
     return response

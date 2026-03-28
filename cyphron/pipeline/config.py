@@ -48,8 +48,20 @@ MODEL_ARTIFACT_PATH = env(
     "GRAPH_MODEL_PATH",
     str(_CYPHRON_ROOT / "pipeline" / "ml" / "artifacts" / "graphsage_model.pt"),
 )
+SHAP_SURROGATE_PATH = env(
+    "SHAP_SURROGATE_PATH",
+    str(_CYPHRON_ROOT / "pipeline" / "ml" / "artifacts" / "shap_surrogate.pkl"),
+)
+SHAP_BACKGROUND_PATH = env(
+    "SHAP_BACKGROUND_PATH",
+    str(_CYPHRON_ROOT / "pipeline" / "ml" / "artifacts" / "shap_background.npy"),
+)
 PROCESSED_GRAPH_PATH = env(
     "PROCESSED_GRAPH_PATH",
     str(_CYPHRON_ROOT / "ml_training" / "data" / "processed_graph.npz"),
+)
+TRAINING_HISTORY_PATH = env(
+    "TRAINING_HISTORY_PATH",
+    str(_CYPHRON_ROOT / "ml_training" / "data" / "transactions.csv"),
 )
 ENABLE_GCP_STARTUP = env_bool("ENABLE_GCP_STARTUP", True)

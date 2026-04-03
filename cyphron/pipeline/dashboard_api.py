@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from pipeline import config
+from pipeline import dashboard_demo_data
 from pipeline.compliance.str_attach import build_str_and_pdf
+from pipeline.compliance.str_generator import _fallback_report
 from pipeline.db.ingestion_store import _sanitize_doc_id
 from pipeline.graph.neo4j_client import get_neo4j_client, initialize_neo4j
 from pipeline.ingestion.publisher import publish_message
@@ -28,7 +31,35 @@ from pipeline.scoring.composite import ACTION_BY_TIER
 
 router = APIRouter(tags=["dashboard-v1"])
 
+# Gemini / PDF generation can stall the report UI; fall back to deterministic STR after this many seconds.
+_DASHBOARD_STR_BUILD_TIMEOUT_SEC = 25.0
+
 _SEED_DOC_ID = "cyphron_db_seed"
+
+
+def _build_str_pdf_for_dashboard(base: DecisionResponse, tx: Transaction) -> tuple[str, str | None]:
+    """Run STR+PDF off the event loop thread with a hard deadline so GET /report cannot hang indefinitely."""
+
+    def _run() -> tuple[str, str | None]:
+        return build_str_and_pdf(base, tx)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(_run)
+        try:
+            return fut.result(timeout=_DASHBOARD_STR_BUILD_TIMEOUT_SEC)
+        except FuturesTimeout:
+            reasons = [factor.detail for factor in base.top_factors if factor.detail]
+            if not reasons:
+                reasons = ["Composite graph and model signals exceeded the critical risk threshold."]
+            fb = _fallback_report(
+                entity_id=base.source_account_id,
+                risk_score=base.composite_score,
+                tier=base.risk_tier,
+                reasons=reasons,
+                transaction_summary=tx.model_dump(mode="json"),
+                mode="Timeout fallback",
+            )
+            return fb, None
 
 _DASHBOARD_CACHE: dict[str, tuple[float, Any]] = {}
 _T = TypeVar("_T")
@@ -89,6 +120,10 @@ def _ts_iso(val: Any) -> str:
 
 def _alert_doc_to_record(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
     alert_id = str(data.get("alert_id") or doc_id)
+    pt = str(data.get("pipeline_risk_tier") or "").upper()
+    if pt not in ("LOW", "MEDIUM", "HIGH", "CRITICAL"):
+        rl = str(data.get("risk_level") or "medium").lower()
+        pt = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}.get(rl, "MEDIUM")
     return {
         "alertId": alert_id,
         "accountId": str(data.get("account_id") or ""),
@@ -97,6 +132,7 @@ def _alert_doc_to_record(doc_id: str, data: dict[str, Any]) -> dict[str, Any]:
         "channel": str(data.get("channel") or ""),
         "riskScore": float(data.get("risk_score") or 0),
         "riskLevel": str(data.get("risk_level") or "medium"),
+        "pipelineRiskTier": pt,
         "ruleFlags": str(data.get("rule_flags") or ""),
         "behaviorSignature": str(data.get("behavior_signature") or ""),
         "status": str(data.get("status") or "open"),
@@ -156,6 +192,9 @@ def list_alerts(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0, le=10_000),
 ) -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.list_alerts_demo(status, risk_level, since, limit, offset)
+
     cache_key = f"alerts:{status}:{risk_level}:{since}:{limit}:{offset}"
 
     def compute() -> list[dict[str, Any]]:
@@ -245,7 +284,17 @@ def _doc_to_transaction_summary(tx: dict[str, Any]) -> dict[str, str]:
 
 
 @router.get("/alerts/{alert_id}/report")
-def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
+def get_alert_report(
+    alert_id: str,
+    request: Request,
+    regenerate: bool = Query(False, description="Bypass Firestore str_report and run Gemini again (needs env)."),
+) -> dict[str, Any]:
+    if config.dashboard_demo_mode():
+        print(f"STR report GET: demo mode (no Gemini) alert_id={alert_id!r}", flush=True)
+        row = dashboard_demo_data.get_alert_report_demo(alert_id, _public_backend_base(request))
+        if row is None:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        return row
     db = _firestore_db()
     ref, data = _find_alert(db, alert_id)
     if ref is None or not data:
@@ -269,6 +318,14 @@ def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
     if not reasons and data.get("rule_flags"):
         reasons = [s.strip() for s in str(data["rule_flags"]).split(",") if s.strip()]
 
+    cached = str_report is not None and str(str_report).strip() != ""
+    will_gen = str_report is None and tier == "CRITICAL" and bool(tx_data)
+    print(
+        f"STR report GET: alert_id={alert_id!r} tier={tier} cached_report={cached} "
+        f"has_tx_doc={bool(tx_data)} will_call_gemini={will_gen}",
+        flush=True,
+    )
+
     if str_report is None and tier == "CRITICAL" and tx_data:
         try:
             tx = Transaction.model_validate(tx_data)
@@ -288,7 +345,7 @@ def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
                 top_factors=[DecisionFactor(name="ingestion", value=1.0, detail=r) for r in reasons]
                 or [DecisionFactor(name="ingestion", value=1.0, detail="Critical risk alert")],
             )
-            str_report, pdf_path = build_str_and_pdf(base, tx)
+            str_report, pdf_path = _build_str_pdf_for_dashboard(base, tx)
             from google.cloud.firestore import SERVER_TIMESTAMP
 
             ref.set(
@@ -300,6 +357,9 @@ def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
                 merge=True,
             )
             invalidate_dashboard_firestore_cache()
+            snap = ref.get()
+            if snap.exists:
+                data = snap.to_dict() or data
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"STR generation failed: {exc}") from exc
 
@@ -328,6 +388,11 @@ def get_alert_report(alert_id: str, request: Request) -> dict[str, Any]:
 
 @router.get("/alerts/{alert_id}/report/pdf")
 def get_alert_report_pdf(alert_id: str) -> FileResponse:
+    if config.dashboard_demo_mode():
+        raise HTTPException(
+            status_code=404,
+            detail="Demo mode: STR PDF is not generated on disk. Use the report page for narrative text.",
+        )
     db = _firestore_db()
     ref, data = _find_alert(db, alert_id)
     if ref is None or not data:
@@ -379,6 +444,9 @@ def _bucket_rule_flag(flag_blob: str) -> str:
 
 @router.get("/analytics/summary")
 def analytics_summary() -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.analytics_summary_demo()
+
     cap = _analytics_cap()
 
     def compute() -> list[dict[str, Any]]:
@@ -457,6 +525,9 @@ def analytics_summary() -> list[dict[str, Any]]:
 
 @router.get("/analytics/fraud-signals")
 def analytics_fraud_signals() -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.analytics_fraud_signals_demo()
+
     cap = _analytics_cap()
 
     def compute() -> list[dict[str, Any]]:
@@ -487,6 +558,9 @@ def analytics_fraud_signals() -> list[dict[str, Any]]:
 
 @router.get("/analytics/channel-exposure")
 def analytics_channel_exposure() -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.analytics_channel_exposure_demo()
+
     cap = _analytics_cap()
 
     def compute() -> list[dict[str, Any]]:
@@ -545,6 +619,9 @@ def analytics_channel_exposure() -> list[dict[str, Any]]:
 
 @router.get("/analytics/risk-volume")
 def analytics_risk_volume() -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.analytics_risk_volume_demo()
+
     cap = _analytics_cap()
 
     def compute() -> list[dict[str, Any]]:
@@ -587,6 +664,9 @@ def analytics_risk_volume() -> list[dict[str, Any]]:
 
 @router.get("/analytics/transactions-timeseries")
 def analytics_transactions_timeseries() -> list[dict[str, Any]]:
+    if config.dashboard_demo_mode():
+        return dashboard_demo_data.analytics_transactions_timeseries_demo()
+
     cap = min(_analytics_cap(), 800)
 
     def compute() -> list[dict[str, Any]]:

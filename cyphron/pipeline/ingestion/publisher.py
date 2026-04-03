@@ -14,10 +14,7 @@ from simulator.tx_simulator import (
 )
 
 if config.GOOGLE_APPLICATION_CREDENTIALS:
-    os.environ.setdefault(
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        config.GOOGLE_APPLICATION_CREDENTIALS,
-    )
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = config.GOOGLE_APPLICATION_CREDENTIALS
 
 PROJECT_ID = config.GCP_PROJECT_ID or "cyphron"
 TOPIC_ID = config.PUBSUB_TOPIC or "transactions"

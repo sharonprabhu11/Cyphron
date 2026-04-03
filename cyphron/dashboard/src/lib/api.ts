@@ -1,5 +1,6 @@
 import type {
   AlertRecord,
+  DecisionRiskTier,
   AlertStrReportPayload,
   AlertTickerItem,
   FraudSignalSlice,
@@ -22,23 +23,48 @@ export class BackendNotConfiguredError extends Error {
   }
 }
 
-async function backendFetch<T>(path: string, init?: RequestInit): Promise<T> {
+type BackendFetchInit = RequestInit & { timeoutMs?: number };
+
+async function backendFetch<T>(path: string, init?: BackendFetchInit): Promise<T> {
   const base = getBackendBaseUrl();
   if (!base) throw new BackendNotConfiguredError();
+  const { timeoutMs = 45_000, ...fetchInit } = init ?? {};
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(init?.headers as Record<string, string>),
-    },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `${res.status} ${res.statusText}`);
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...fetchInit,
+      signal: ctrl.signal,
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        ...(fetchInit.headers as Record<string, string>),
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `${res.status} ${res.statusText}`);
+    }
+    return res.json() as Promise<T>;
+  } catch (e: unknown) {
+    const name =
+      e instanceof Error
+        ? e.name
+        : e instanceof DOMException
+          ? e.name
+          : typeof e === "object" && e !== null && "name" in e
+            ? String((e as { name: unknown }).name)
+            : "";
+    if (name === "AbortError") {
+      throw new Error(
+        `Request timed out after ${timeoutMs / 1000}s. Check the pipeline is running at ${base} (report requests wait on Firestore / STR generation).`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(tid);
   }
-  return res.json() as Promise<T>;
 }
 
 export async function fetchAlerts(params?: { status?: string; riskLevel?: string; limit?: number; offset?: number }) {
@@ -66,7 +92,7 @@ export async function patchAlertStatus(alertId: string, status: AlertRecord["sta
 
 export async function fetchReport(alertId: string) {
   const enc = encodeURIComponent(alertId);
-  return backendFetch<AlertStrReportPayload>(`/api/v1/alerts/${enc}/report`);
+  return backendFetch<AlertStrReportPayload>(`/api/v1/alerts/${enc}/report`, { timeoutMs: 90_000 });
 }
 
 export async function fetchAnalyticsSummary() {
@@ -119,16 +145,24 @@ const inr = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 2,
 });
 
+function tickerPipelineTier(a: AlertRecord): DecisionRiskTier {
+  if (a.pipelineRiskTier) return a.pipelineRiskTier;
+  if (a.riskLevel === "high") return "HIGH";
+  if (a.riskLevel === "low") return "LOW";
+  return "MEDIUM";
+}
+
 export function alertRecordToTickerItem(a: AlertRecord): AlertTickerItem {
-  const high = a.riskLevel === "high";
+  const tier = tickerPipelineTier(a);
+  const strong = tier === "HIGH" || tier === "CRITICAL";
   return {
     id: a.alertId,
     title: `${a.accountId} · ${a.channel.toUpperCase()}`,
     meta: a.ruleFlags || "Pipeline alert",
     value: inr.format(a.amount),
     badge: `${(a.riskScore * 100).toFixed(1)}%`,
-    badgeUp: high,
-    inverted: high,
+    badgeUp: strong,
+    inverted: tier === "CRITICAL",
   };
 }
 

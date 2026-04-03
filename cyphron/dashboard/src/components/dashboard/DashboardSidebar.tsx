@@ -30,8 +30,8 @@ export function DashboardSidebar() {
 
   return (
     <aside className="flex w-[72px] shrink-0 flex-col items-center border-r border-border bg-white py-6 dark:border-white/10 dark:bg-zinc-900">
-      <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-2xl bg-primary text-sm font-bold text-primary-foreground">
-        C
+      <div className="mb-8 flex h-10 w-10 items-center justify-center overflow-hidden rounded-2xl">
+        <img src="/cyphron_logo.jpeg" alt="" width={40} height={40} className="h-10 w-10 object-cover" />
       </div>
       <nav className="flex flex-1 flex-col gap-2">
         {nav.map(({ href, label, icon: Icon }) => {

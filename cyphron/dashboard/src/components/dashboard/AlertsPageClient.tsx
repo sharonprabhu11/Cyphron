@@ -48,7 +48,7 @@ import {
 } from "@/components/ui/table";
 import { fetchAlerts, getBackendBaseUrl, patchAlertStatus } from "@/lib/api";
 import { useDashboardRealtime } from "@/lib/dashboardRealtimeContext";
-import type { AlertRecord, AlertRiskLevel, AlertStatus } from "@/lib/dashboard/types";
+import type { AlertRecord, AlertRiskLevel, AlertStatus, DecisionRiskTier } from "@/lib/dashboard/types";
 import { cn } from "@/lib/utils";
 
 const inr = new Intl.NumberFormat("en-IN", {
@@ -102,25 +102,40 @@ function formatWhenDetail(iso: string) {
   });
 }
 
-/** Reference-style criticality labels from fraud risk level. */
-function criticalityLabel(level: AlertRiskLevel) {
-  if (level === "high") return "Critical";
-  if (level === "medium") return "High";
+/** Prefer API `pipelineRiskTier` so list matches STR report (HIGH vs CRITICAL both use riskLevel `high`). */
+function resolvePipelineTier(a: AlertRecord): DecisionRiskTier {
+  if (a.pipelineRiskTier) return a.pipelineRiskTier;
+  if (a.riskLevel === "high") return "HIGH";
+  if (a.riskLevel === "low") return "LOW";
+  return "MEDIUM";
+}
+
+function pipelineCriticalityLabel(tier: DecisionRiskTier) {
+  if (tier === "CRITICAL") return "Critical";
+  if (tier === "HIGH") return "High";
+  if (tier === "MEDIUM") return "Medium";
   return "Low";
 }
 
-function criticalityBadge(level: AlertRiskLevel) {
-  if (level === "high") {
+function pipelineCriticalityBadge(tier: DecisionRiskTier) {
+  if (tier === "CRITICAL") {
     return (
       <span className="inline-flex rounded-md bg-orange-600 px-2.5 py-0.5 text-xs font-semibold text-white dark:bg-orange-600">
         Critical
       </span>
     );
   }
-  if (level === "medium") {
+  if (tier === "HIGH") {
     return (
       <span className="inline-flex rounded-md border border-orange-400 bg-orange-50 px-2.5 py-0.5 text-xs font-semibold text-red-800 dark:border-orange-500/60 dark:bg-orange-950/40 dark:text-orange-200">
         High
+      </span>
+    );
+  }
+  if (tier === "MEDIUM") {
+    return (
+      <span className="inline-flex rounded-md border border-amber-200 bg-amber-50/80 px-2.5 py-0.5 text-xs font-semibold text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100">
+        Medium
       </span>
     );
   }
@@ -194,7 +209,7 @@ function SortHeader({
 function computeHeaderStats(alerts: AlertRecord[]) {
   const active = alerts.filter((a) => a.status !== "closed").length;
   const unacknowledged = alerts.filter((a) => a.status === "open").length;
-  const critical = alerts.filter((a) => a.riskLevel === "high" && a.status !== "closed").length;
+  const critical = alerts.filter((a) => resolvePipelineTier(a) === "CRITICAL" && a.status !== "closed").length;
   const subscribed = alerts.filter((a) => a.status === "investigating" || a.status === "acknowledged").length;
   const escalated = alerts.filter((a) => a.status === "investigating").length;
   return { active, unacknowledged, critical, subscribed, escalated };
@@ -389,9 +404,9 @@ export function AlertsPageClient() {
     }
   };
 
-  const rowBorderClass = (level: AlertRiskLevel) => {
-    if (level === "high") return accent.barHigh;
-    if (level === "medium") return accent.barMed;
+  const rowBorderClassForTier = (tier: DecisionRiskTier) => {
+    if (tier === "CRITICAL" || tier === "HIGH") return accent.barHigh;
+    if (tier === "MEDIUM") return accent.barMed;
     return accent.barLow;
   };
 
@@ -593,7 +608,7 @@ export function AlertsPageClient() {
                         data-state={selected?.alertId === row.alertId ? "selected" : undefined}
                         className={cn(
                           "cursor-pointer border-b border-stone-100 border-l-4 dark:border-white/10",
-                          rowBorderClass(row.riskLevel),
+                          rowBorderClassForTier(resolvePipelineTier(row)),
                           selected?.alertId === row.alertId && "bg-orange-50/60 dark:bg-orange-950/20",
                           resolvedRow && "opacity-70"
                         )}
@@ -627,7 +642,9 @@ export function AlertsPageClient() {
                         <TableCell className="whitespace-nowrap text-sm text-stone-600 dark:text-zinc-300">
                           {formatDateTimeLabel(row.timestamp)}
                         </TableCell>
-                        <TableCell className="hidden sm:table-cell">{criticalityBadge(row.riskLevel)}</TableCell>
+                        <TableCell className="hidden sm:table-cell">
+                          {pipelineCriticalityBadge(resolvePipelineTier(row))}
+                        </TableCell>
                         <TableCell className="hidden md:table-cell">
                           <OccurrenceSpark seed={row.alertId} />
                         </TableCell>
@@ -695,9 +712,10 @@ export function AlertsPageClient() {
             ) : (
               <>
                 <div className="flex flex-wrap items-center gap-2">
-                  {criticalityBadge(selected.riskLevel)}
+                  {pipelineCriticalityBadge(resolvePipelineTier(selected))}
                   <span className="text-xs text-stone-500 dark:text-zinc-400">
-                    ({criticalityLabel(selected.riskLevel)} · {(selected.riskScore * 100).toFixed(0)}% model score)
+                    ({pipelineCriticalityLabel(resolvePipelineTier(selected))} ·{" "}
+                    {(selected.riskScore * 100).toFixed(0)}% model score)
                   </span>
                   {statusBadge(selected.status)}
                   <Select

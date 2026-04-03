@@ -52,6 +52,9 @@ export type AlertRiskLevel = "high" | "medium" | "low";
 
 export type AlertStatus = "open" | "acknowledged" | "investigating" | "closed";
 
+/** Pipeline `DecisionResponse.risk_tier` — STR is generated only for CRITICAL. */
+export type DecisionRiskTier = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
 export type AlertRecord = {
   alertId: string;
   accountId: string;
@@ -60,6 +63,8 @@ export type AlertRecord = {
   channel: string;
   riskScore: number;
   riskLevel: AlertRiskLevel;
+  /** Pipeline tier (matches STR report); HIGH and CRITICAL both use riskLevel `high` in Firestore. */
+  pipelineRiskTier?: DecisionRiskTier;
   ruleFlags: string;
   behaviorSignature: string;
   status: AlertStatus;
@@ -69,9 +74,6 @@ export type AlertRecord = {
   createdAt: string;
   updatedAt: string;
 };
-
-/** Pipeline `DecisionResponse.risk_tier` — STR is generated only for CRITICAL. */
-export type DecisionRiskTier = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 /**
  * Payload for the per-alert STR report UI (mirrors `str_report` + generator inputs).

@@ -1,6 +1,7 @@
 "use client";
 
 import { notFound, useParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
 
 import { AlertReportClient } from "@/components/dashboard/AlertReportClient";
@@ -21,6 +22,12 @@ export default function AlertReportPage() {
         : "";
 
   const backendOk = Boolean(getBackendBaseUrl());
+  const [slowHint, setSlowHint] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlowHint(true), 10_000);
+    return () => clearTimeout(t);
+  }, []);
+
   const { data: alert, error: alertErr } = useSWR(
     backendOk && alertId ? ["alert", alertId] : null,
     () => fetchAlert(alertId)
@@ -52,7 +59,18 @@ export default function AlertReportPage() {
   }
 
   if (!alert || !report) {
-    return <p className="text-sm text-stone-500 dark:text-zinc-400">Loading report…</p>;
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-stone-500 dark:text-zinc-400">Loading report…</p>
+        {slowHint ? (
+          <p className="max-w-md text-xs text-stone-400 dark:text-zinc-500">
+            Still working — CRITICAL alerts may wait on Firestore and STR generation. If this never finishes, confirm{" "}
+            <code className="rounded bg-stone-100 px-1 dark:bg-zinc-800">CYPHRON_DASHBOARD_DEMO=1</code> for offline
+            demo data or check the pipeline URL matches <code className="rounded bg-stone-100 px-1 dark:bg-zinc-800">NEXT_PUBLIC_BACKEND_URL</code>.
+          </p>
+        ) : null}
+      </div>
+    );
   }
 
   return <AlertReportClient alert={alert} report={report} />;

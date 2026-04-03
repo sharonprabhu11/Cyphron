@@ -50,6 +50,16 @@ PROCESSED_GRAPH_PATH = env(
 )
 ENABLE_GCP_STARTUP = env_bool("ENABLE_GCP_STARTUP", True)
 
+# Static alerts + analytics for the dashboard when Firestore/Pub/Sub are not ready (see pipeline/dashboard_demo_data.py).
+def dashboard_demo_mode() -> bool:
+    return env_bool("CYPHRON_DASHBOARD_DEMO", False)
+
+
+def allow_str_report_regenerate() -> bool:
+    """Allow GET /alerts/{id}/report?regenerate=1 to bypass cached str_report (local dev / testing)."""
+    return env_bool("ALLOW_STR_REPORT_REGENERATE", False)
+
+
 # When true, ingestion also writes `alerts` for MEDIUM tier (noisier; useful for local demos).
 INGESTION_ALERT_INCLUDE_MEDIUM = env_bool("INGESTION_ALERT_INCLUDE_MEDIUM", False)
 

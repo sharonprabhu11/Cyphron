@@ -1,10 +1,8 @@
 """
 Cyphron pipeline entrypoint.
 
-- serve: FastAPI backend (default when invoked with no subcommand).
-- ingestion: Pub/Sub publisher + subscriber (Transaction schema validated on consume).
-
-Graph, features, and other stages can be wired here later.
+- serve: FastAPI backend (default when invoked with no subcommand)
+- ingestion: Pub/Sub publisher + subscriber
 """
 
 from __future__ import annotations
@@ -21,29 +19,19 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from pipeline.config import (
-    ENABLE_GCP_STARTUP,
-    cors_origins,
-    enable_firestore_realtime,
-    ws_max_connections,
-)
-from pipeline.dashboard_api import router as dashboard_v1_router
+from pipeline.config import ENABLE_GCP_STARTUP, FRONTEND_ORIGINS
 from pipeline.db import create_dummy_collections, init_bigquery, init_firestore
 from pipeline.decision.api import router as decision_router
 from pipeline.graph.neo4j_client import get_neo4j_client, initialize_neo4j
-from pipeline.realtime.dashboard_realtime import (
-    dashboard_realtime_hub,
-    start_firestore_watchers,
-)
 from pipeline.services import DecisionService
 
-# Default 8810 avoids common 8000/8001 conflicts; override with PIPELINE_PORT or PORT.
 PORT = int(os.getenv("PIPELINE_PORT", os.getenv("PORT", "8810")))
 HOST = os.getenv("PIPELINE_HOST", "0.0.0.0")
+CORS_ORIGINS = [origin.strip() for origin in (FRONTEND_ORIGINS or "").split(",") if origin.strip()]
 
 
 @asynccontextmanager
@@ -88,7 +76,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Cyphron Pipeline Backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins(),
+    allow_origins=CORS_ORIGINS or ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

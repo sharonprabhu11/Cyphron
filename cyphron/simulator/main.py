@@ -36,15 +36,15 @@ def main() -> None:
         print(generate_normal_tx())
 
     print("\n---- FANOUT FRAUD ----")
-    for tx in generate_fanout_fraud():
+    for tx in generate_fanout_fraud(0):
         print(tx)
 
     print("\n---- STRUCTURING FRAUD ----")
-    for tx in generate_structuring_fraud():
+    for tx in generate_structuring_fraud(0):
         print(tx)
 
     print("\n---- LAYERING FRAUD ----")
-    for tx in generate_layering_fraud():
+    for tx in generate_layering_fraud(0):
         print(tx)
 
 

@@ -6,17 +6,11 @@ from __future__ import annotations
 
 import argparse
 import json
-<<<<<<< HEAD
 import pickle
 from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-=======
-from pathlib import Path
-
-import numpy as np
->>>>>>> pr-7
 
 try:
     import torch
@@ -24,20 +18,14 @@ try:
     from torch import Tensor
     from torch_geometric.data import Data
     from torch_geometric.nn import SAGEConv
-<<<<<<< HEAD
     from torch_geometric.utils import subgraph
-=======
->>>>>>> pr-7
 except Exception:  # pragma: no cover - optional heavy deps
     torch = None  # type: ignore
     F = None  # type: ignore
     Tensor = None  # type: ignore
     Data = None  # type: ignore
     SAGEConv = None  # type: ignore
-<<<<<<< HEAD
     subgraph = None  # type: ignore
-=======
->>>>>>> pr-7
 
 
 if torch is not None:
@@ -60,11 +48,7 @@ if torch is not None:
 
 
 def _require_torch() -> None:
-<<<<<<< HEAD
     if torch is None or Data is None or SAGEConv is None or subgraph is None:
-=======
-    if torch is None or Data is None or SAGEConv is None:
->>>>>>> pr-7
         raise SystemExit(
             "GraphSAGE training requires torch and torch-geometric. "
             "Install ml_training/requirements-optional-torch.txt first."
@@ -80,13 +64,10 @@ def _load_processed_graph(path: Path) -> tuple["Data", dict[str, object]]:
     metadata = {
         "account_ids": raw["account_ids"].tolist(),
         "feature_names": raw["feature_names"].tolist(),
-<<<<<<< HEAD
         "train_mask": raw["train_mask"] if "train_mask" in raw.files else None,
         "val_mask": raw["val_mask"] if "val_mask" in raw.files else None,
         "test_mask": raw["test_mask"] if "test_mask" in raw.files else None,
         "group_ids": raw["group_ids"].tolist() if "group_ids" in raw.files else None,
-=======
->>>>>>> pr-7
     }
     return graph, metadata
 
@@ -120,7 +101,6 @@ def _f1_score(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return 2 * precision * recall / (precision + recall)
 
 
-<<<<<<< HEAD
 def _precision_recall(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float]:
     tp = int(((y_true == 1) & (y_pred == 1)).sum())
     fp = int(((y_true == 0) & (y_pred == 1)).sum())
@@ -142,8 +122,6 @@ def _induced_subgraph_data(data: "Data", mask: np.ndarray) -> tuple["Data", np.n
     return graph, node_indices
 
 
-=======
->>>>>>> pr-7
 def train_model(
     input_path: Path,
     artifact_dir: Path,
@@ -158,7 +136,6 @@ def train_model(
     np.random.seed(seed)
 
     data, metadata = _load_processed_graph(input_path)
-<<<<<<< HEAD
     if metadata["train_mask"] is not None:
         train_mask = np.asarray(metadata["train_mask"], dtype=bool)
         val_mask = np.asarray(metadata["val_mask"], dtype=bool)
@@ -167,9 +144,9 @@ def train_model(
         train_mask, val_mask, test_mask = _train_val_test_masks(data.num_nodes, seed=seed)
 
     train_mask_t = torch.tensor(train_mask, dtype=torch.bool)
-    train_graph, train_node_indices = _induced_subgraph_data(data, train_mask)
-    val_graph, val_node_indices = _induced_subgraph_data(data, val_mask)
-    test_graph, test_node_indices = _induced_subgraph_data(data, test_mask)
+    train_graph, _ = _induced_subgraph_data(data, train_mask)
+    val_graph, _ = _induced_subgraph_data(data, val_mask)
+    test_graph, _ = _induced_subgraph_data(data, test_mask)
 
     model = GraphSageClassifier(input_dim=data.num_node_features, hidden_dim=hidden_dim)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
@@ -180,47 +157,23 @@ def train_model(
         [1.0, negative_count / positive_count],
         dtype=torch.float32,
     )
-=======
-    train_mask, val_mask, test_mask = _train_val_test_masks(data.num_nodes, seed=seed)
-
-    train_mask_t = torch.tensor(train_mask, dtype=torch.bool)
-    val_mask_t = torch.tensor(val_mask, dtype=torch.bool)
-    test_mask_t = torch.tensor(test_mask, dtype=torch.bool)
-
-    model = GraphSageClassifier(input_dim=data.num_node_features, hidden_dim=hidden_dim)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
->>>>>>> pr-7
 
     best_val_f1 = -1.0
     best_state: dict[str, object] | None = None
 
-<<<<<<< HEAD
     for epoch in range(epochs):
         model.train()
         optimizer.zero_grad()
         logits = model(train_graph.x, train_graph.edge_index)
         loss = F.cross_entropy(logits, train_graph.y, weight=class_weights)
-=======
-    for _ in range(epochs):
-        model.train()
-        optimizer.zero_grad()
-        logits = model(data.x, data.edge_index)
-        loss = F.cross_entropy(logits[train_mask_t], data.y[train_mask_t])
->>>>>>> pr-7
         loss.backward()
         optimizer.step()
 
         model.eval()
         with torch.no_grad():
-<<<<<<< HEAD
             val_logits = model(val_graph.x, val_graph.edge_index)
             val_pred = val_logits.argmax(dim=1).cpu().numpy()
             val_true = val_graph.y.cpu().numpy()
-=======
-            val_logits = model(data.x, data.edge_index)[val_mask_t]
-            val_pred = val_logits.argmax(dim=1).cpu().numpy()
-            val_true = data.y[val_mask_t].cpu().numpy()
->>>>>>> pr-7
             val_f1 = _f1_score(val_true, val_pred)
             if val_f1 >= best_val_f1:
                 best_val_f1 = val_f1
@@ -229,10 +182,7 @@ def train_model(
                     "input_dim": data.num_node_features,
                     "hidden_dim": hidden_dim,
                     "feature_names": metadata["feature_names"],
-<<<<<<< HEAD
                     "best_epoch": epoch + 1,
-=======
->>>>>>> pr-7
                 }
 
     assert best_state is not None
@@ -243,7 +193,6 @@ def train_model(
     model.load_state_dict(best_state["model_state_dict"])  # type: ignore[index]
     model.eval()
     with torch.no_grad():
-<<<<<<< HEAD
         logits = model(test_graph.x, test_graph.edge_index)
         pred = logits.argmax(dim=1).cpu().numpy()
         true = test_graph.y.cpu().numpy()
@@ -280,20 +229,6 @@ def train_model(
         background = background[rng.choice(len(background), size=128, replace=False)]
     np.save(artifact_dir / "shap_background.npy", background.astype(np.float32))
 
-=======
-        logits = model(data.x, data.edge_index)[test_mask_t]
-        pred = logits.argmax(dim=1).cpu().numpy()
-        true = data.y[test_mask_t].cpu().numpy()
-        metrics = {
-            "test_f1": round(_f1_score(true, pred), 4),
-            "test_accuracy": round(float((pred == true).mean()) if len(true) else 0.0, 4),
-            "positives_in_test": int(true.sum()),
-            "checkpoint": str(checkpoint_path),
-            "num_nodes": int(data.num_nodes),
-            "num_edges": int(data.num_edges),
-        }
-
->>>>>>> pr-7
     (artifact_dir / "training_metrics.json").write_text(json.dumps(metrics, indent=2))
     return metrics
 
